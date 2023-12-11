@@ -1,3 +1,7 @@
+'use strict';
+
+Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
+
 function makeMap(str, expectsLowerCase) {
   const map = /* @__PURE__ */ Object.create(null);
   const list = str.split(",");
@@ -24545,5 +24549,6 @@ const _sfc_main = /* @__PURE__ */ defineComponent({
 
 createApp(_sfc_main).mount("#app");
 
-export { MarkdownRenderer, _sfc_main$1 as VueMarkdown };
-//# sourceMappingURL=index.js.map
+exports.MarkdownRenderer = MarkdownRenderer;
+exports.VueMarkdown = _sfc_main$1;
+//# sourceMappingURL=markdown.cjs.map

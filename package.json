@@ -3,7 +3,8 @@
     "version": "0.0.0",
     "private": true,
     "type": "module",
-    "main": "dist/markdown.js",
+    "main": "dist/markdown.cjs",
+    "module": "dist/markdown.js",
     "types": "dist/index.d.ts",
     "scripts": {
         "dev": "vite",
