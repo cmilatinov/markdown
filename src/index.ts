@@ -1,9 +1,10 @@
 import { createApp } from 'vue';
 
 import App from '@/App.vue';
-import Markdown from '@/components/markdown.vue';
-export default Markdown;
 
 createApp(App)
     .mount('#app');
 
+import VueMarkdown from '@/components/markdown.vue';
+export { MarkdownRenderer } from '@/components/markdown';
+export { VueMarkdown };
