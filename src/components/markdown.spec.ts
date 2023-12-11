@@ -1,15 +1,24 @@
 import { expect, test } from 'vitest';
 import { MarkdownRenderer } from './markdown';
+import { compare, normalize } from '../composables/utils';
 
 function createMdTest(md: string | string[], expected: string | string[]) {
     return () => {
         const mdText = Array.isArray(md) ? md.join('\n') : md;
         const expectedText = Array.isArray(expected) ? expected.join('\n') : expected;
+        const expectedNode = document.createElement('div');
+        expectedNode.innerHTML = expectedText;
+        expectedNode.normalize();
         const renderer = new MarkdownRenderer(mdText);
         renderer.render();
-        const html = renderer.html();
-        console.log(html);
-        expect(html.trim()).toBe(expectedText.trim());
+        const node = renderer.domNode();
+        normalize(node);
+        console.log(node.innerHTML);
+        console.log('=============');
+        normalize(expectedNode);
+        console.log(expectedNode.innerHTML);
+        console.log(compare(node, expectedNode));
+        expect(node.isEqualNode(expectedNode)).toBeTruthy();
     };
 }
 
@@ -28,17 +37,17 @@ test('header test', createMdTest([
     '######heading 6'
 ], [
     '<h1>heading 1</h1>',
-    '<p>#heading 1</p>',
+    '<h1>heading 1</h1>',
     '<h2>heading 2</h2>',
-    '<p>##heading 2</p>',
+    '<h2>heading 2</h2>',
     '<h3>heading 3</h3>',
-    '<p>###heading 3</p>',
+    '<h3>heading 3</h3>',
     '<h4>heading 4</h4>',
-    '<p>####heading 4</p>',
+    '<h4>heading 4</h4>',
     '<h5>heading 5</h5>',
-    '<p>#####heading 5</p>',
+    '<h5>heading 5</h5>',
     '<h6>heading 6</h6>',
-    '<p>######heading 6</p>'
+    '<h6>heading 6</h6>'
 ]));
 
 test('paragraph test', createMdTest([
@@ -72,7 +81,6 @@ test('unoredered list', createMdTest([
     '    - Indented item',
     '        - Giga indented item',
     '    - Indented item',
-    'asdasdasd',
     '- Fourth item'
 ], [
     '<ul>',
@@ -80,7 +88,11 @@ test('unoredered list', createMdTest([
     '  <li>Second item</li>',
     '  <li>Third item',
     '    <ul>',
-    '      <li>Indented item</li>',
+    '      <li>Indented item',
+    '        <ul>',
+    '          <li>Giga indented item</li>',
+    '        </ul>',
+    '      </li>',
     '      <li>Indented item</li>',
     '    </ul>',
     '  </li>',
@@ -96,15 +108,25 @@ test('blockquote', createMdTest([
     '>',
     '>  *Everything* is going according to **plan**.'
 ], [
-    '<blockquote>Dorothy followed her through many of the beautiful rooms in her castle.',
-    '<blockquote>Dorothy followed her through many of the beautiful rooms in her castle.</blockquote></blockquote>'
+    '<blockquote>',
+    '  <h4>The quarterly results look great!</h4>',
+    '  <blockquote>',
+    '    <p>The Witch bade her clean the pots and kettles and sweep the floor and keep the fire fed with wood.</p>',
+    '  </blockquote>',
+    '  <ul>',
+    '    <li>Revenue was off the chart.</li>',
+    '    <li>Profits were higher than ever.</li>',
+    '  </ul>',
+    '  <p></p>',
+    '  <p><i>Everything</i> is going according to <b>plan</b>.</p>',
+    '</blockquote>'
 ]))
 
 test('checkmark', createMdTest([
     '- [ ] unchecked',
     '- [x] checked'
 ], [
-    '<input type="checkbox" id="input_checkbox_1"/><label for="input_checkbox_1">unchecked</label>',
-    '<input type="checkbox" id="input_checkbox_2" checked/><label for="input_checkbox_2">checked</label>'
+    '<input type="checkbox" id="input_checkbox_1"/><label for="input_checkbox_1">unchecked</label><br>',
+    '<input type="checkbox" id="input_checkbox_2" checked/><label for="input_checkbox_2">checked</label><br>'
 ]));
 

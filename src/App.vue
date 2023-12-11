@@ -5,6 +5,6 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import Markdown from '@/markdown.vue';
+import Markdown from '@/components/markdown.vue';
 const md = ref('');
 </script>
