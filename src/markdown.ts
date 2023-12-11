@@ -3,7 +3,7 @@ import _ from 'lodash';
 enum MarkdownCommand {
     PARAGRAPH = 'p',
     HEADING = 'h',
-    CHECKBOX = 'checkbox',
+    CHECKBOX_LABEL = 'label',
     BLOCKQUOTE = 'blockquote',
     LIST = 'l',
     LIST_ITEM = 'li'
@@ -26,7 +26,7 @@ const MD_LINE_BREAK_REGEX = / {2,}$/;
 const MD_LINK_REGEX = /\[(.*)]\((.*?)\)/g;
 const MD_LINK_IMAGE_REGEX = /!\[(.*?)]\((.*?)\)/g
 
-const MD_CHECKBOX_REGEX = /^- \[([ x])]/;
+const MD_CHECKBOX_REGEX = /^\s*- \[([ x])]/;
 const MD_HEADER_REGEX = /^\s*(#{1,6})/;
 const MD_BLOCKQUOTE_REGEX = /^\s*>/;
 const MD_UNORDERED_LIST_REGEX = /^((:?\s{4})*)\s*-/;
@@ -37,9 +37,9 @@ const MD_COMMANDS: Array<[MarkdownCommand, RegExp, MarkdownMatchBlocksFn | null]
         command: MarkdownCommand.HEADING,
         options: { n: match[1].length }
     }])],
-    [MarkdownCommand.CHECKBOX, MD_CHECKBOX_REGEX, (match) => ([{
-        command: MarkdownCommand.CHECKBOX,
-        options: { checked: match[1] === 'x' }
+    [MarkdownCommand.CHECKBOX_LABEL, MD_CHECKBOX_REGEX, (match) => ([{
+        command: MarkdownCommand.CHECKBOX_LABEL,
+        options: { id: _.uniqueId(), checked: match[1] === 'x' }
     }])],
     [MarkdownCommand.BLOCKQUOTE, MD_BLOCKQUOTE_REGEX, null],
     [MarkdownCommand.LIST, MD_UNORDERED_LIST_REGEX, (match) => {
@@ -116,7 +116,8 @@ export class MarkdownRenderer {
         while (index < Math.min(oldBlocks.length, blocks.length)) {
             if (
                 oldBlocks[index].command !== blocks[index].command ||
-                (index === blocks.length - 1 &&
+                (blocks[index].command === MarkdownCommand.LIST_ITEM &&
+                    blocks.map(b => b.command).lastIndexOf(MarkdownCommand.LIST_ITEM) === index &&
                     !_.isEqual(oldBlocks[index].options, blocks[index].options))
             ) {
                 break;
@@ -163,8 +164,6 @@ export class MarkdownRenderer {
         switch (block.command) {
             case MarkdownCommand.HEADING:
                 return `h${block.options?.n}`;
-            case MarkdownCommand.CHECKBOX:
-                return 'input';
             case MarkdownCommand.LIST:
                 return block.options?.ordered ? 'ol' : 'ul';
         }
@@ -177,16 +176,18 @@ export class MarkdownRenderer {
                 return {};
             case MarkdownCommand.LIST_ITEM:
                 return {};
-            case MarkdownCommand.CHECKBOX:
+            case MarkdownCommand.CHECKBOX_LABEL:
                 return {
-                    type: 'checkbox',
-                    ...block.options
+                    for: block.options.id
                 };
         }
         return block.options;
     }
 
     private _pushBlock(block: MarkdownBlock) {
+        if (block.command === MarkdownCommand.CHECKBOX_LABEL) {
+            this._renderOpeningTag('input', { type: 'checkbox', ...block.options }, true);
+        }
         this._renderOpeningTag(
             this._tagName(block),
             this._tagAttributes(block)
