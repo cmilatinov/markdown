@@ -1,4 +1,5 @@
 import { createApp } from 'vue';
+import '@/assets/style/tailwind.scss';
 
 import App from '@/App.vue';
 

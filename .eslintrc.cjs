@@ -12,6 +12,7 @@ module.exports = {
     parserOptions: {
         ecmaVersion: 'latest'
     },
+    ignorePatterns: ['tailwind.config.js'],
     rules: {
         'vue/multi-word-component-names': 'off'
     }

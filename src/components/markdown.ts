@@ -7,7 +7,9 @@ enum MarkdownCommand {
     BLOCKQUOTE = 'blockquote',
     LIST = 'l',
     LIST_ITEM = 'li',
-    TABLE = 'table'
+    TABLE = 'table',
+    CODE_BLOCK = 'code',
+    HORIZONTAL_RULE = 'hr'
 }
 
 interface MarkdownBlock {
@@ -20,6 +22,7 @@ type MarkdownMatchBlocksFn = (renderer: MarkdownRenderer, match: RegExpMatchArra
 const MD_ITALIC_REGEX = /\*(.*?)\*/g;
 const MD_SUBSCRIPT_REGEX = /_(.*?)_/g;
 const MD_SUPERSCRIPT_REGEX = /\^(.*?)\^/g;
+const MD_CODE_REGEX = /`(.*?)`/g;
 const MD_BOLD_REGEX = /\*\*(.*?)\*\*/g;
 const MD_UNDERLINE_REGEX = /__(.*?)__/g;
 const MD_HIGHLIGHT_REGEX = /==(.*?)==/g;
@@ -37,6 +40,8 @@ const MD_HEADER_REGEX = /^\s*(#{1,6})/;
 const MD_BLOCKQUOTE_REGEX = /^\s*>/;
 const MD_UNORDERED_LIST_REGEX = /^((:?\s{4})*)\s*-/;
 const MD_ORDERED_LIST_REGEX = /^((:?\s{4})*)\s*[0-9]+\./;
+const MD_CODE_BLOCK_REGEX = /^\s*```/;
+const MD_HORIZONTAL_RULE_REGEX = /^\s*-{3,}/;
 
 const MD_TABLE_CELL_REGEX = /^\s*([^|]*)\s*\|/;
 const MD_TABLE_SEPARATOR_REGEX = /^\s*(-+)\s*\|/;
@@ -46,11 +51,16 @@ const MD_COMMANDS: Array<[MarkdownCommand, RegExp, boolean, MarkdownMatchBlocksF
         command: MarkdownCommand.HEADING,
         options: { n: match[1].length }
     }])],
+    [MarkdownCommand.HORIZONTAL_RULE, MD_HORIZONTAL_RULE_REGEX, false, null],
     [MarkdownCommand.CHECKBOX_LABEL, MD_CHECKBOX_REGEX, false, (r, match) => ([{
         command: MarkdownCommand.CHECKBOX_LABEL,
         options: { id: r.nextId(), checked: match[1] === 'x' }
     }])],
     [MarkdownCommand.TABLE, MD_TABLE_REGEX, false, null],
+    [MarkdownCommand.CODE_BLOCK, MD_CODE_BLOCK_REGEX, false, (_, match) => ([{
+        command: MarkdownCommand.CODE_BLOCK,
+        options: { code: match[1] }
+    }])],
     [MarkdownCommand.BLOCKQUOTE, MD_BLOCKQUOTE_REGEX, true, null],
     [MarkdownCommand.LIST, MD_UNORDERED_LIST_REGEX, false, (r, match) => {
         const indent = (match[1]?.length ?? 0) / 4;
@@ -94,7 +104,6 @@ export class MarkdownRenderer {
             const end = cr >= 0 ? cr : remaining.length;
             const [blocks, line, text] = this._lineCommands(remaining.substring(0, end));
             const diff = this._diffBlocks(blocks);
-            console.log(`[${blocks.map(b => b.command)}] ${line}`);
 
             // Close commands on stack
             const nPoppedBlocks = this._blockStack.length - diff;
@@ -104,15 +113,16 @@ export class MarkdownRenderer {
             const added = blocks.slice(diff, blocks.length);
             added.forEach(b => this._pushBlock(b));
 
+            const command = _.last(blocks)?.command;
             if (
                 text === '' &&
                 ([MarkdownCommand.PARAGRAPH, MarkdownCommand.LIST_ITEM] as (MarkdownCommand | undefined)[])
-                    .includes(_.last(blocks)?.command)
+                    .includes(command)
             ) {
                 this._popBlock();
-            } else if (_.last(blocks)?.command === MarkdownCommand.TABLE) {
+            } else if (command === MarkdownCommand.TABLE) {
                 this._tableRows.push(`|${text}`);
-            } else {
+            } else if (command !== MarkdownCommand.HORIZONTAL_RULE) {
                 this._renderText(text);
             }
 
@@ -144,10 +154,10 @@ export class MarkdownRenderer {
         while (index < Math.min(oldBlocks.length, blocks.length)) {
             if (
                 oldBlocks[index].command !== blocks[index].command ||
+                [MarkdownCommand.HEADING,  MarkdownCommand.HORIZONTAL_RULE].includes(blocks[index].command) ||
                 (blocks[index].command === MarkdownCommand.LIST_ITEM &&
                     blocks.map(b => b.command).lastIndexOf(MarkdownCommand.LIST_ITEM) === index &&
                     !_.isEqual(oldBlocks[index].options, blocks[index].options)) ||
-                blocks[index].command === MarkdownCommand.HEADING ||
                 (blocks[index].command === MarkdownCommand.CHECKBOX_LABEL &&
                     !_.isEqual(oldBlocks[index].options, blocks[index].options))
             ) {
@@ -231,8 +241,11 @@ export class MarkdownRenderer {
                     true
                 );
                 break;
+            case MarkdownCommand.CODE_BLOCK:
+                this._renderOpeningTag('pre');
+                break;
         }
-        if (block.command !== MarkdownCommand.TABLE) {
+        if (block.command !== MarkdownCommand.TABLE && block.command !== MarkdownCommand.HORIZONTAL_RULE) {
             this._renderOpeningTag(
                 this._tagName(block),
                 this._tagAttributes(block)
@@ -258,6 +271,12 @@ export class MarkdownRenderer {
                         this._renderClosingTag('p');
                     }
                     this._tableRows = [];
+                    return;
+                case MarkdownCommand.CODE_BLOCK:
+                    this._renderClosingTag('pre');
+                    return;
+                case MarkdownCommand.HORIZONTAL_RULE:
+                    this._renderOpeningTag('hr', undefined, true);
                     return;
             }
         }
@@ -329,6 +348,7 @@ export class MarkdownRenderer {
     }
 
     private _renderText(text: string) {
+        const isCode = _.last(this._blockStack)?.command === MarkdownCommand.CODE_BLOCK;
         text = text
             .replace(MD_LINK_IMAGE_REGEX, '<img src="$2" alt="$1">')
             .replace(MD_LINK_REGEX, '<a href="$2">$1</a>')
@@ -339,10 +359,13 @@ export class MarkdownRenderer {
             .replace(MD_ITALIC_REGEX, '<i>$1</i>')
             .replace(MD_SUBSCRIPT_REGEX, '<sub>$1</sub>')
             .replace(MD_SUPERSCRIPT_REGEX, '<sup>$1</sup>')
+            .replace(MD_CODE_REGEX, '<code>$1</code>')
             .replace(MD_LINE_BREAK_REGEX, '<br>')
-            .replace(MD_ESCAPED_CHAR, '$1')
-            .trim();
-        this._html += `${text} `;
+            .replace(MD_ESCAPED_CHAR, '$1');
+        if (!isCode) {
+            text = text.trim();
+        }
+        this._html += `${text}${isCode ? '\n' : ' '}`;
     }
 
     private _renderOpeningTag(tag: string, props?: any, selfClosing?: boolean) {
