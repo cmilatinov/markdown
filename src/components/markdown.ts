@@ -6,7 +6,8 @@ enum MarkdownCommand {
     CHECKBOX_LABEL = 'label',
     BLOCKQUOTE = 'blockquote',
     LIST = 'l',
-    LIST_ITEM = 'li'
+    LIST_ITEM = 'li',
+    TABLE = 'table'
 }
 
 interface MarkdownBlock {
@@ -16,33 +17,42 @@ interface MarkdownBlock {
 
 type MarkdownMatchBlocksFn = (renderer: MarkdownRenderer, match: RegExpMatchArray, stack: MarkdownBlock[]) => MarkdownBlock[];
 
-const MD_ITALIC_N_BOLD_REGEX1 = /\*\*\*([\s\S]+?)\*\*\*/g;
-const MD_ITALIC_N_BOLD_REGEX2 = /___([\s\S]+?)___/g;
-const MD_BOLD_REGEX1 = /\*\*([\s\S]+?)\*\*/g;
-const MD_BOLD_REGEX2 = /__([\s\S]+?)__/g;
-const MD_ITALIC_REGEX1 = /\*([\s\S]+?)\*/g;
-const MD_ITALIC_REGEX2 = /_([\s\S]+?)_/g;
+const MD_ITALIC_REGEX = /\*(.*?)\*/g;
+const MD_SUBSCRIPT_REGEX = /_(.*?)_/g;
+const MD_SUPERSCRIPT_REGEX = /\^(.*?)\^/g;
+const MD_BOLD_REGEX = /\*\*(.*?)\*\*/g;
+const MD_UNDERLINE_REGEX = /__(.*?)__/g;
+const MD_HIGHLIGHT_REGEX = /==(.*?)==/g;
+const MD_STRIKETHROUGH_REGEX = /~~(.*?)~~/g;
+
 const MD_LINE_BREAK_REGEX = / {2,}$/;
 const MD_LINK_REGEX = /\[(.*)]\((.*?)\)/g;
 const MD_LINK_IMAGE_REGEX = /!\[(.*?)]\((.*?)\)/g;
 
+const MD_ESCAPED_CHAR = /\\([\\`*_{}[\]<>()#+-.!|])/g;
+
+const MD_TABLE_REGEX = /^\s*\|/;
 const MD_CHECKBOX_REGEX = /^\s*- \[([ x])]/;
 const MD_HEADER_REGEX = /^\s*(#{1,6})/;
 const MD_BLOCKQUOTE_REGEX = /^\s*>/;
 const MD_UNORDERED_LIST_REGEX = /^((:?\s{4})*)\s*-/;
 const MD_ORDERED_LIST_REGEX = /^((:?\s{4})*)\s*[0-9]+\./;
 
-const MD_COMMANDS: Array<[MarkdownCommand, RegExp, MarkdownMatchBlocksFn | null]> = [
-    [MarkdownCommand.HEADING, MD_HEADER_REGEX, (_, match) => ([{
+const MD_TABLE_CELL_REGEX = /^\s*([^|]*)\s*\|/;
+const MD_TABLE_SEPARATOR_REGEX = /^\s*(-+)\s*\|/;
+
+const MD_COMMANDS: Array<[MarkdownCommand, RegExp, boolean, MarkdownMatchBlocksFn | null]> = [
+    [MarkdownCommand.HEADING, MD_HEADER_REGEX, false, (_, match) => ([{
         command: MarkdownCommand.HEADING,
         options: { n: match[1].length }
     }])],
-    [MarkdownCommand.CHECKBOX_LABEL, MD_CHECKBOX_REGEX, (r, match) => ([{
+    [MarkdownCommand.CHECKBOX_LABEL, MD_CHECKBOX_REGEX, false, (r, match) => ([{
         command: MarkdownCommand.CHECKBOX_LABEL,
         options: { id: r.nextId(), checked: match[1] === 'x' }
     }])],
-    [MarkdownCommand.BLOCKQUOTE, MD_BLOCKQUOTE_REGEX, null],
-    [MarkdownCommand.LIST, MD_UNORDERED_LIST_REGEX, (r, match) => {
+    [MarkdownCommand.TABLE, MD_TABLE_REGEX, false, null],
+    [MarkdownCommand.BLOCKQUOTE, MD_BLOCKQUOTE_REGEX, true, null],
+    [MarkdownCommand.LIST, MD_UNORDERED_LIST_REGEX, false, (r, match) => {
         const indent = (match[1]?.length ?? 0) / 4;
         return [...Array(indent + 1)].map(() => [
             { command: MarkdownCommand.LIST, options: { ordered: false } },
@@ -50,7 +60,7 @@ const MD_COMMANDS: Array<[MarkdownCommand, RegExp, MarkdownMatchBlocksFn | null]
         ])
             .flat();
     }],
-    [MarkdownCommand.LIST, MD_ORDERED_LIST_REGEX, (r, match) => {
+    [MarkdownCommand.LIST, MD_ORDERED_LIST_REGEX, false, (r, match) => {
         const indent = (match[1]?.length ?? 0) / 4;
         return [...Array(indent + 1)].map(() => [
             { command: MarkdownCommand.LIST, options: { ordered: true } },
@@ -66,6 +76,7 @@ export class MarkdownRenderer {
     private _cursor: number;
     private _html: string;
     private readonly _blockStack: MarkdownBlock[];
+    private _tableRows: string[];
 
     constructor(input: string) {
         this._id = 1;
@@ -73,6 +84,7 @@ export class MarkdownRenderer {
         this._cursor = 0;
         this._html = '';
         this._blockStack = [];
+        this._tableRows = [];
     }
 
     public render() {
@@ -82,6 +94,7 @@ export class MarkdownRenderer {
             const end = cr >= 0 ? cr : remaining.length;
             const [blocks, line, text] = this._lineCommands(remaining.substring(0, end));
             const diff = this._diffBlocks(blocks);
+            console.log(`[${blocks.map(b => b.command)}] ${line}`);
 
             // Close commands on stack
             const nPoppedBlocks = this._blockStack.length - diff;
@@ -97,6 +110,8 @@ export class MarkdownRenderer {
                     .includes(_.last(blocks)?.command)
             ) {
                 this._popBlock();
+            } else if (_.last(blocks)?.command === MarkdownCommand.TABLE) {
+                this._tableRows.push(`|${text}`);
             } else {
                 this._renderText(text);
             }
@@ -149,13 +164,14 @@ export class MarkdownRenderer {
         let hasNext = false;
         do {
             hasNext = false;
-            for (const [cmd, regex, fn] of MD_COMMANDS) {
+            for (const [cmd, regex, multiple, fn] of MD_COMMANDS) {
                 let match: RegExpMatchArray | null;
                 if ((match = line.match(regex)) !== null) {
                     line = line.substring(match[0].length ?? 0);
                     const newBlocks = fn ? fn(this, match, this._blockStack) : [{ command: cmd }];
                     blocks.push(...newBlocks);
-                    hasNext = true;
+                    hasNext = multiple;
+                    break;
                 }
             }
         } while (hasNext);
@@ -196,50 +212,135 @@ export class MarkdownRenderer {
                 return {
                     for: `input_checkbox_${block.options.id}`
                 };
+            case MarkdownCommand.LIST:
+                return {};
         }
         return block.options;
     }
 
     private _pushBlock(block: MarkdownBlock) {
-        if (block.command === MarkdownCommand.CHECKBOX_LABEL) {
+        switch (block.command) {
+            case MarkdownCommand.CHECKBOX_LABEL:
+                this._renderOpeningTag(
+                    'input',
+                    {
+                        type: 'checkbox',
+                        ...block.options,
+                        id: `input_checkbox_${block.options.id}`
+                    },
+                    true
+                );
+                break;
+        }
+        if (block.command !== MarkdownCommand.TABLE) {
             this._renderOpeningTag(
-                'input',
-                {
-                    type: 'checkbox',
-                    ...block.options,
-                    id: `input_checkbox_${block.options.id}`
-                },
-                true
+                this._tagName(block),
+                this._tagAttributes(block)
             );
         }
-        this._renderOpeningTag(
-            this._tagName(block),
-            this._tagAttributes(block)
-        );
         this._blockStack.push(block);
     }
 
     private _popBlock() {
         const block = this._blockStack.pop();
         if (block) {
-            this._renderClosingTag(this._tagName(block));
-            if (block.command === MarkdownCommand.CHECKBOX_LABEL) {
-                this._html += '<br>';
+            if (block.command !== MarkdownCommand.TABLE) {
+                this._renderClosingTag(this._tagName(block));
+            }
+            switch (block.command) {
+                case MarkdownCommand.CHECKBOX_LABEL:
+                    this._html += '<br>';
+                    return;
+                case MarkdownCommand.TABLE:
+                    if (!this._renderTable()) {
+                        this._renderOpeningTag('p');
+                        this._tableRows.forEach(r => this._renderText(`${r}<br>`));
+                        this._renderClosingTag('p');
+                    }
+                    this._tableRows = [];
+                    return;
             }
         }
+    }
+
+    private _parseTableCells(row: string, regex: RegExp) {
+        row = row.substring(1);
+        const cells = [];
+        let match: RegExpMatchArray | null;
+        while (row.length > 0 && (match = row.match(regex)) != null) {
+            cells.push(match[1]);
+            row = row.substring(match[0].length);
+        }
+        return cells;
+    }
+
+    private _renderTable() {
+        const rows = this._tableRows;
+        if (rows.length < 2) {
+            return false;
+        }
+
+        const headers = this._parseTableCells(rows[0], MD_TABLE_CELL_REGEX);
+        const separators = this._parseTableCells(rows[1], MD_TABLE_SEPARATOR_REGEX);
+        if (separators.length !== headers.length) {
+            return false;
+        }
+
+        const table = [];
+        let failed = false;
+        for (let i = 2; i < rows.length; i++) {
+            const cells = this._parseTableCells(rows[i], MD_TABLE_CELL_REGEX);
+            if (cells.length !== headers.length) {
+                failed = true;
+                break;
+            } else {
+                table.push(cells);
+            }
+        }
+
+        if (failed) {
+            return false;
+        }
+
+        this._renderOpeningTag('table');
+        this._renderOpeningTag('thead');
+        this._renderOpeningTag('tr');
+        headers.forEach((h) => {
+            this._renderOpeningTag('th');
+            this._renderText(h.trim());
+            this._renderClosingTag('th');
+        });
+        this._renderClosingTag('tr');
+        this._renderClosingTag('thead');
+        this._renderOpeningTag('tbody');
+        table.forEach((r) => {
+            this._renderOpeningTag('tr');
+            r.forEach((c) => {
+                this._renderOpeningTag('td');
+                this._renderText(c);
+                this._renderClosingTag('td');
+            });
+            this._renderClosingTag('tr');
+        });
+        this._renderClosingTag('tbody');
+        this._renderClosingTag('table');
+
+        return true;
     }
 
     private _renderText(text: string) {
         text = text
             .replace(MD_LINK_IMAGE_REGEX, '<img src="$2" alt="$1">')
             .replace(MD_LINK_REGEX, '<a href="$2">$1</a>')
-            .replace(MD_ITALIC_N_BOLD_REGEX1, '<i><b>$1</b></i>')
-            .replace(MD_ITALIC_N_BOLD_REGEX2, '<i><b>$1</b></i>')
-            .replace(MD_BOLD_REGEX1, '<b>$1</b>')
-            .replace(MD_BOLD_REGEX2, '<b>$1</b>')
-            .replace(MD_ITALIC_REGEX1, '<i>$1</i>')
-            .replace(MD_ITALIC_REGEX2, '<i>$1</i>')
+            .replace(MD_BOLD_REGEX, '<b>$1</b>')
+            .replace(MD_UNDERLINE_REGEX, '<ins>$1</ins>')
+            .replace(MD_HIGHLIGHT_REGEX, '<mark>$1</mark>')
+            .replace(MD_STRIKETHROUGH_REGEX, '<del>$1</del>')
+            .replace(MD_ITALIC_REGEX, '<i>$1</i>')
+            .replace(MD_SUBSCRIPT_REGEX, '<sub>$1</sub>')
+            .replace(MD_SUPERSCRIPT_REGEX, '<sup>$1</sup>')
             .replace(MD_LINE_BREAK_REGEX, '<br>')
+            .replace(MD_ESCAPED_CHAR, '$1')
             .trim();
         this._html += `${text} `;
     }

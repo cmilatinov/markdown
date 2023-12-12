@@ -3,7 +3,6 @@
 </template>
 
 <script lang="ts" setup>
-
 import { MarkdownRenderer } from '@/components/markdown';
 
 interface Props {
