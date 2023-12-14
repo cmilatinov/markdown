@@ -24444,7 +24444,7 @@ const MARKDOWN_COMMANDS = {
     }
   },
   ["p" /* PARAGRAPH */]: {
-    regex: /^[^\S\n]*\S/,
+    regex: /^[^\S\n]*(?=\S)/,
     multiline: true,
     stackable: false,
     onMatch: () => [{ type: "p" /* PARAGRAPH */, state: { text: "" } }],
@@ -24679,9 +24679,6 @@ class MarkdownRenderer {
     const endLine = remaining.indexOf("\n");
     let text = remaining.substring(0, endLine >= 0 ? endLine : remaining.length);
     this._cursor += matched.length + text.length + 1;
-    if (_.last(commands)?.type === "p" /* PARAGRAPH */) {
-      text = matched.charAt(matched.length - 1) + text;
-    }
     return [matched, text, commands];
   }
   _properties(cmd) {
