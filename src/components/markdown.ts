@@ -1,5 +1,5 @@
 import _ from 'lodash';
-import { escapeHTML } from '@/composables/utils';
+import {escapeHTML} from '@/composables/utils';
 
 
 enum MarkdownCommand {
@@ -10,7 +10,7 @@ enum MarkdownCommand {
     LIST = 'l',
     LIST_ITEM = 'li',
     TABLE = 'table',
-    CODE_BLOCK = 'code'
+    CODE_BLOCK = 'code',
 }
 
 interface MarkdownCommandProperties {
@@ -51,15 +51,15 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
         isEqualToFirst: () => false,
         onMatch: (state, match) => [{
             type: MarkdownCommand.CHECKBOX_LABEL,
-            state: { id: state.uniqueId(), checked: match[1] === 'x', label: '' }
+            state: {id: state.uniqueId(), checked: match[1] === 'x', label: ''}
         }],
         onTextLine: (_, cmd, text) => {
             cmd.label = text;
         },
         onEnd: (state, cmd) => {
             const id = `input_checkbox_${cmd.id}`;
-            state.renderOpeningTag('input', { id, type: 'checkbox', checked: cmd.checked }, true);
-            state.renderOpeningTag('label', { for: id });
+            state.renderOpeningTag('input', {id, type: 'checkbox', checked: cmd.checked}, true);
+            state.renderOpeningTag('label', {for: id});
             state.renderText(cmd.label.trim());
             state.renderClosingTag('label');
             state.renderOpeningTag('br');
@@ -104,8 +104,8 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
         onMatch: (state, match) => {
             const indent = (match[1]?.length ?? 0) / 4;
             return [...Array(indent + 1)].map(() => [
-                { type: MarkdownCommand.LIST, state: { ordered: match[3]?.endsWith('.') } },
-                { type: MarkdownCommand.LIST_ITEM, state: { id: state.uniqueId() } }
+                {type: MarkdownCommand.LIST, state: {ordered: match[3]?.endsWith('.')}},
+                {type: MarkdownCommand.LIST_ITEM, state: {id: state.uniqueId()}}
             ])
                 .flat();
         },
@@ -125,7 +125,7 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
         stackable: false,
         onMatch: () => [{
             type: MarkdownCommand.TABLE,
-            state: { rows: [] }
+            state: {rows: []}
         }],
         onTextLine: (_, cmd, text) => {
             cmd.rows.push(`|${text}`);
@@ -157,19 +157,20 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
         }
     },
     [MarkdownCommand.HEADING]: {
-        regex: /^[^\S\n]*(#{1,6})/,
+        regex: /^[^\S\n]*(#{1,6})(.*?)(\{.*})?$/m,
         multiline: false,
         stackable: false,
         isEqualToFirst: () => false,
         onMatch: (_, match) => [{
             type: MarkdownCommand.HEADING,
-            state: { n: match[1].length, text: '' }
+            state: {
+                n: match[1].length,
+                text: match[2],
+                id: match[3] ? match[3].substring(1, match[3].length - 1) : undefined
+            }
         }],
-        onTextLine: (_, cmd, text) => {
-            cmd.text = text;
-        },
         onEnd: (state, cmd) => {
-            state.renderOpeningTag(`h${cmd.n}`);
+            state.renderOpeningTag(`h${cmd.n}`, {id: cmd.id});
             state.renderText(cmd.text);
             state.renderClosingTag(`h${cmd.n}`);
         }
@@ -178,7 +179,7 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
         regex: /^[^\S\n]*\S/,
         multiline: true,
         stackable: false,
-        onMatch: () => [{ type: MarkdownCommand.PARAGRAPH, state: { text: '' } }],
+        onMatch: () => [{type: MarkdownCommand.PARAGRAPH, state: {text: ''}}],
         onTextLine: (_, cmd, text) => {
             cmd.text += `${text}\n`;
         },
@@ -237,6 +238,20 @@ class MarkdownRenderState {
 
     public renderText(text: string, escaped?: boolean) {
         if (!escaped) {
+            let match;
+            while ((match = text.match(/!\[(.*?)]\((.*?)\)(\{.*?})?/)) !== null) {
+                let rendered_text = '';
+                const id = match[3] ? `id="${match[3].substring(1, match[3].length - 1)}"` : '';
+                if (match[1] == '') {
+                    rendered_text = `<img src="${match[2]}" ${id}/>`;
+                } else {
+                    rendered_text = `<figure><img src="${match[2]}" alt="${match[1]}" ${id}/><figcaption>${match[1]}</figcaption></figure>`;
+                }
+                text = text.substring(0, match.index) + rendered_text + text.substring((match.index ?? 0) + match[0].length);
+                console.log(match);
+                console.log(text);
+            }
+
             text = text
                 .replace(/\*\*([\S\s]*?)\*\*/g, '<b>$1</b>')
                 .replace(/__([\S\s]*?)__/g, '<ins>$1</ins>')
@@ -246,7 +261,6 @@ class MarkdownRenderState {
                 .replace(/_([\S\s]*?)_/g, '<sub>$1</sub>')
                 .replace(/\^([\S\s]*?)\^/g, '<sup>$1</sup>')
                 .replace(/`([\S\s]*?)`/g, '<code>$1</code>')
-                .replace(/!\[(.*?)]\((.*?)\)/g, '<img src="$2" alt="$1">')
                 .replace(/\[(.*)]\((.*?)\)/g, '<a href="$2">$1</a>')
                 .replace(/ {2,}\n/g, '<br>')
                 .replace(/\\([\\`*_{}[\]<>()#+-.!|])/g, '$1');
@@ -325,7 +339,7 @@ class MarkdownRenderState {
         this.renderOpeningTag('tr');
         headers.forEach((h, i) => {
             const style = `text-align: ${alignment[i]};`;
-            this.renderOpeningTag('th', { style });
+            this.renderOpeningTag('th', {style});
             this.renderText(h.trim());
             this.renderClosingTag('th');
         });
@@ -337,7 +351,7 @@ class MarkdownRenderState {
             this.renderOpeningTag('tr');
             r.forEach((c, i) => {
                 const style = `text-align: ${alignment[i]};`;
-                this.renderOpeningTag('td', { style });
+                this.renderOpeningTag('td', {style});
                 this.renderText(c);
                 this.renderClosingTag('td');
             });
@@ -458,7 +472,7 @@ export class MarkdownRenderer {
         let text = remaining.substring(0, endLine >= 0 ? endLine : remaining.length);
         this._cursor += matched.length + text.length + 1;
         if (_.last(commands)?.type === MarkdownCommand.PARAGRAPH) {
-           text = matched.charAt(matched.length - 1) + text;
+            text = matched.charAt(matched.length - 1) + text;
         }
         return [matched, text, commands] as const;
     }
