@@ -157,7 +157,7 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
         }
     },
     [MarkdownCommand.HEADING]: {
-        regex: /^[^\S\n]*(#{1,6})(.*?)(\{.*})?$/m,
+        regex: /^[^\S\n]*(#{1,6})(.*?)(\{.*})?(?=\n|$)/,
         multiline: false,
         stackable: false,
         isEqualToFirst: () => false,
