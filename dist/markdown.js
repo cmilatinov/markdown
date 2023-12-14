@@ -24425,7 +24425,7 @@ const MARKDOWN_COMMANDS = {
     }
   },
   ["h" /* HEADING */]: {
-    regex: /^[^\S\n]*(#{1,6})(.*?)(\{.*})?$/m,
+    regex: /^[^\S\n]*(#{1,6})(.*?)(\{.*})?(?=\n|$)/,
     multiline: false,
     stackable: false,
     isEqualToFirst: () => false,
