@@ -24309,250 +24309,232 @@ lodash.exports;
 var lodashExports = lodash.exports;
 const _ = /*@__PURE__*/getDefaultExportFromCjs(lodashExports);
 
-const MD_ITALIC_REGEX = /\*(.*?)\*/g;
-const MD_SUBSCRIPT_REGEX = /_(.*?)_/g;
-const MD_SUPERSCRIPT_REGEX = /\^(.*?)\^/g;
-const MD_CODE_REGEX = /`(.*?)`/g;
-const MD_BOLD_REGEX = /\*\*(.*?)\*\*/g;
-const MD_UNDERLINE_REGEX = /__(.*?)__/g;
-const MD_HIGHLIGHT_REGEX = /==(.*?)==/g;
-const MD_STRIKETHROUGH_REGEX = /~~(.*?)~~/g;
-const MD_LINE_BREAK_REGEX = / {2,}$/;
-const MD_LINK_REGEX = /\[(.*)]\((.*?)\)/g;
-const MD_LINK_IMAGE_REGEX = /!\[(.*?)]\((.*?)\)/g;
-const MD_ESCAPED_CHAR = /\\([\\`*_{}[\]<>()#+-.!|])/g;
-const MD_TABLE_REGEX = /^\s*\|/;
-const MD_CHECKBOX_REGEX = /^\s*- \[([ x])]/;
-const MD_HEADER_REGEX = /^\s*(#{1,6})/;
-const MD_BLOCKQUOTE_REGEX = /^\s*>/;
-const MD_UNORDERED_LIST_REGEX = /^((:?\s{4})*)\s*-/;
-const MD_ORDERED_LIST_REGEX = /^((:?\s{4})*)\s*[0-9]+\./;
-const MD_CODE_BLOCK_REGEX = /^\s*```/;
-const MD_HORIZONTAL_RULE_REGEX = /^\s*-{3,}/;
-const MD_TABLE_CELL_REGEX = /^\s*([^|]*)\s*\|/;
-const MD_TABLE_SEPARATOR_REGEX = /^\s*(-+)\s*\|/;
-const MD_COMMANDS = [
-  ["h" /* HEADING */, MD_HEADER_REGEX, false, (_2, match) => [{
-    command: "h" /* HEADING */,
-    options: { n: match[1].length }
-  }]],
-  ["hr" /* HORIZONTAL_RULE */, MD_HORIZONTAL_RULE_REGEX, false, null],
-  ["label" /* CHECKBOX_LABEL */, MD_CHECKBOX_REGEX, false, (r, match) => [{
-    command: "label" /* CHECKBOX_LABEL */,
-    options: { id: r.nextId(), checked: match[1] === "x" }
-  }]],
-  ["table" /* TABLE */, MD_TABLE_REGEX, false, null],
-  ["code" /* CODE_BLOCK */, MD_CODE_BLOCK_REGEX, false, (_2, match) => [{
-    command: "code" /* CODE_BLOCK */,
-    options: { code: match[1] }
-  }]],
-  ["blockquote" /* BLOCKQUOTE */, MD_BLOCKQUOTE_REGEX, true, null],
-  ["l" /* LIST */, MD_UNORDERED_LIST_REGEX, false, (r, match) => {
-    const indent = (match[1]?.length ?? 0) / 4;
-    return [...Array(indent + 1)].map(() => [
-      { command: "l" /* LIST */, options: { ordered: false } },
-      { command: "li" /* LIST_ITEM */, options: { id: r.nextId() } }
-    ]).flat();
-  }],
-  ["l" /* LIST */, MD_ORDERED_LIST_REGEX, false, (r, match) => {
-    const indent = (match[1]?.length ?? 0) / 4;
-    return [...Array(indent + 1)].map(() => [
-      { command: "l" /* LIST */, options: { ordered: true } },
-      { command: "li" /* LIST_ITEM */, options: { id: r.nextId() } }
-    ]).flat();
-  }]
-];
-class MarkdownRenderer {
+function escapeHTML(content) {
+  const text = document.createTextNode(content);
+  const p = document.createElement("p");
+  p.appendChild(text);
+  return p.innerHTML;
+}
+
+const MARKDOWN_COMMANDS = {
+  ["label" /* CHECKBOX_LABEL */]: {
+    regex: /^[^\S\n]*- \[([ x])]/,
+    multiline: false,
+    stackable: false,
+    isEqualToFirst: () => false,
+    onMatch: (state, match) => [{
+      type: "label" /* CHECKBOX_LABEL */,
+      state: { id: state.uniqueId(), checked: match[1] === "x", label: "" }
+    }],
+    onTextLine: (_2, cmd, text) => {
+      cmd.label = text;
+    },
+    onEnd: (state, cmd) => {
+      const id = `input_checkbox_${cmd.id}`;
+      state.renderOpeningTag("input", { id, type: "checkbox", checked: cmd.checked }, true);
+      state.renderOpeningTag("label", { for: id });
+      state.renderText(cmd.label.trim());
+      state.renderClosingTag("label");
+      state.renderOpeningTag("br");
+    }
+  },
+  ["blockquote" /* BLOCKQUOTE */]: {
+    regex: /^[^\S\n]*>/,
+    multiline: true,
+    stackable: true,
+    onStart: (state) => {
+      state.renderOpeningTag("blockquote");
+    },
+    onEnd: (state) => {
+      state.renderClosingTag("blockquote");
+    }
+  },
+  ["l" /* LIST */]: {
+    regex: null,
+    multiline: true,
+    stackable: true,
+    isEqualToFirst: (cmd, stack, newStack) => {
+      const isLast = newStack.map((c) => c.type).lastIndexOf("l" /* LIST */) === 0;
+      return !isLast || _.isEqual(stack[0]?.state, cmd);
+    },
+    onStart: (state, cmd) => {
+      const tag = cmd.ordered ? "ol" : "ul";
+      state.renderOpeningTag(tag);
+    },
+    onEnd: (state, cmd) => {
+      const tag = cmd.ordered ? "ol" : "ul";
+      state.renderClosingTag(tag);
+    }
+  },
+  ["li" /* LIST_ITEM */]: {
+    regex: /^((:? {4})*)[^\S\n]*([0-9]+\.|-)/,
+    multiline: true,
+    stackable: false,
+    isEqualToFirst: (cmd, stack, newStack) => {
+      const isLast = newStack.map((c) => c.type).lastIndexOf("li" /* LIST_ITEM */) === 0;
+      return !isLast || _.isEqual(stack[0]?.state, cmd);
+    },
+    onMatch: (state, match) => {
+      const indent = (match[1]?.length ?? 0) / 4;
+      return [...Array(indent + 1)].map(() => [
+        { type: "l" /* LIST */, state: { ordered: match[3]?.endsWith(".") } },
+        { type: "li" /* LIST_ITEM */, state: { id: state.uniqueId() } }
+      ]).flat();
+    },
+    onStart: (state) => {
+      state.renderOpeningTag("li");
+    },
+    onTextLine: (state, _2, text) => {
+      state.renderText(text);
+    },
+    onEnd: (state) => {
+      state.renderClosingTag("li");
+    }
+  },
+  ["table" /* TABLE */]: {
+    regex: /^[^\S\n]*\|/,
+    multiline: true,
+    stackable: false,
+    onMatch: () => [{
+      type: "table" /* TABLE */,
+      state: { rows: [] }
+    }],
+    onTextLine: (_2, cmd, text) => {
+      cmd.rows.push(`|${text}`);
+    },
+    onEnd: (state, cmd) => {
+      if (!state.renderTable(cmd.rows)) {
+        state.renderOpeningTag("p");
+        state.renderText(cmd.rows.join("<br>"));
+        state.renderClosingTag("p");
+      }
+    }
+  },
+  ["code" /* CODE_BLOCK */]: {
+    regex: /^[^\S\n]*```([\s\S]*?)```/,
+    multiline: true,
+    stackable: false,
+    onMatch: (_2, match) => [{
+      type: "code" /* CODE_BLOCK */,
+      state: {
+        code: match[1].trim()
+      }
+    }],
+    onEnd: (state, cmd) => {
+      state.renderOpeningTag("pre");
+      state.renderOpeningTag("code", void 0, false, false);
+      state.renderText(cmd.code, true);
+      state.renderClosingTag("code", false);
+      state.renderClosingTag("pre");
+    }
+  },
+  ["h" /* HEADING */]: {
+    regex: /^[^\S\n]*(#{1,6})/,
+    multiline: false,
+    stackable: false,
+    isEqualToFirst: () => false,
+    onMatch: (_2, match) => [{
+      type: "h" /* HEADING */,
+      state: { n: match[1].length, text: "" }
+    }],
+    onTextLine: (_2, cmd, text) => {
+      cmd.text = text;
+    },
+    onEnd: (state, cmd) => {
+      state.renderOpeningTag(`h${cmd.n}`);
+      state.renderText(cmd.text);
+      state.renderClosingTag(`h${cmd.n}`);
+    }
+  },
+  ["p" /* PARAGRAPH */]: {
+    regex: /^[^\S\n]*\S/,
+    multiline: true,
+    stackable: false,
+    onMatch: () => [{ type: "p" /* PARAGRAPH */, state: { text: "" } }],
+    onTextLine: (_2, cmd, text) => {
+      cmd.text += `${text}
+`;
+    },
+    onEnd: (state, cmd) => {
+      state.renderOpeningTag("p");
+      state.renderText(cmd.text);
+      state.renderClosingTag("p");
+    }
+  }
+};
+const MD_TABLE_CELL_REGEX = /^\s*([^|:]*)\s*\|/;
+const MD_TABLE_SEPARATOR_REGEX = /^\s*(:?-+:?)\s*\|/;
+class MarkdownRenderState {
   _id;
-  _input;
-  _cursor;
   _html;
-  _blockStack;
-  _tableRows;
-  constructor(input) {
-    this._id = 1;
-    this._input = input;
-    this._cursor = 0;
+  _commandStack;
+  constructor() {
+    this._id = 0;
     this._html = "";
-    this._blockStack = [];
-    this._tableRows = [];
+    this._commandStack = [];
   }
-  render() {
-    while (this._cursor < this._input.length) {
-      const remaining = this._input.substring(this._cursor);
-      const cr = remaining.indexOf("\n");
-      const end = cr >= 0 ? cr : remaining.length;
-      const [blocks, line, text] = this._lineCommands(remaining.substring(0, end));
-      const diff = this._diffBlocks(blocks);
-      const nPoppedBlocks = this._blockStack.length - diff;
-      for (let i = 0; i < nPoppedBlocks; i++) {
-        this._popBlock();
-      }
-      const added = blocks.slice(diff, blocks.length);
-      added.forEach((b) => this._pushBlock(b));
-      const command = _.last(blocks)?.command;
-      if (text === "" && ["p" /* PARAGRAPH */, "li" /* LIST_ITEM */].includes(command)) {
-        this._popBlock();
-      } else if (command === "table" /* TABLE */) {
-        this._tableRows.push(`|${text}`);
-      } else if (command !== "hr" /* HORIZONTAL_RULE */) {
-        this._renderText(text);
-      }
-      this._cursor += line.length + 1;
-    }
-    while (this._blockStack.length > 0) {
-      this._popBlock();
-    }
-  }
-  html() {
-    return this._html;
-  }
-  domNode() {
-    const div = document.createElement("div");
-    div.innerHTML = this.html();
-    div.normalize();
-    return div;
-  }
-  nextId() {
+  uniqueId() {
     return this._id++;
   }
-  _diffBlocks(blocks) {
-    const oldBlocks = [...this._blockStack];
-    let index = 0;
-    while (index < Math.min(oldBlocks.length, blocks.length)) {
-      if (oldBlocks[index].command !== blocks[index].command || ["h" /* HEADING */, "hr" /* HORIZONTAL_RULE */].includes(blocks[index].command) || blocks[index].command === "li" /* LIST_ITEM */ && blocks.map((b) => b.command).lastIndexOf("li" /* LIST_ITEM */) === index && !_.isEqual(oldBlocks[index].options, blocks[index].options) || blocks[index].command === "label" /* CHECKBOX_LABEL */ && !_.isEqual(oldBlocks[index].options, blocks[index].options)) {
-        break;
+  pushCommand(instance) {
+    this._commandStack.push(instance);
+    this._properties(instance.type).onStart?.call(void 0, this, instance.state);
+  }
+  popCommand() {
+    const instance = this._commandStack.pop();
+    if (instance) {
+      this._properties(instance.type).onEnd?.call(void 0, this, instance.state);
+    }
+  }
+  peekCommand() {
+    return _.last(this._commandStack);
+  }
+  peekCommands(n) {
+    return this._commandStack.slice(n ? -n : 0);
+  }
+  renderText(text, escaped) {
+    if (!escaped) {
+      text = text.replace(/\*\*([\S\s]*?)\*\*/g, "<b>$1</b>").replace(/__([\S\s]*?)__/g, "<ins>$1</ins>").replace(/==([\S\s]*?)==/g, "<mark>$1</mark>").replace(/~~([\S\s]*?)~~/g, "<del>$1</del>").replace(/\*([\S\s]*?)\*/g, "<i>$1</i>").replace(/_([\S\s]*?)_/g, "<sub>$1</sub>").replace(/\^([\S\s]*?)\^/g, "<sup>$1</sup>").replace(/`([\S\s]*?)`/g, "<code>$1</code>").replace(/!\[(.*?)]\((.*?)\)/g, '<img src="$2" alt="$1">').replace(/\[(.*)]\((.*?)\)/g, '<a href="$2">$1</a>').replace(/ {2,}\n/g, "<br>").replace(/\\([\\`*_{}[\]<>()#+-.!|])/g, "$1");
+    } else {
+      text = escapeHTML(text);
+    }
+    this._html += `${text}
+`;
+  }
+  renderOpeningTag(tag, attributes, selfClosing = false, whitespace = true) {
+    const props = Object.entries(attributes ?? {}).map(([k, v]) => {
+      if (_.isNil(v) || v === false) {
+        return "";
       }
-      index++;
-    }
-    return index;
-  }
-  _lineCommands(line) {
-    const originalLine = line;
-    let blocks = [];
-    let hasNext = false;
-    do {
-      hasNext = false;
-      for (const [cmd, regex, multiple, fn] of MD_COMMANDS) {
-        let match;
-        if ((match = line.match(regex)) !== null) {
-          line = line.substring(match[0].length ?? 0);
-          const newBlocks = fn ? fn(this, match, this._blockStack) : [{ command: cmd }];
-          blocks.push(...newBlocks);
-          hasNext = multiple;
-          break;
-        }
+      if (v === true) {
+        return k;
       }
-    } while (hasNext);
-    if (blocks.length === 0) {
-      if (_.last(this._blockStack)?.command == "li" /* LIST_ITEM */) {
-        blocks = [...this._blockStack];
-      } else {
-        blocks.push({
-          command: "p" /* PARAGRAPH */
-        });
-      }
-    }
-    if (_.last(blocks)?.command === "blockquote" /* BLOCKQUOTE */) {
-      blocks.push({
-        command: "p" /* PARAGRAPH */
-      });
-    }
-    return [blocks, originalLine, line];
+      return `${k}="${v}"`;
+    }).join(" ");
+    this._html += `<${tag}${props ? ` ${props}` : ""}${selfClosing ? "/" : ""}>${whitespace ? "\n" : ""}`;
   }
-  _tagName(block) {
-    switch (block.command) {
-      case "h" /* HEADING */:
-        return `h${block.options?.n}`;
-      case "l" /* LIST */:
-        return block.options?.ordered ? "ol" : "ul";
-    }
-    return block.command;
+  renderClosingTag(tag, whitespace = true) {
+    this._html += `</${tag}>${whitespace ? "\n" : ""}`;
   }
-  _tagAttributes(block) {
-    switch (block.command) {
-      case "h" /* HEADING */:
-        return {};
-      case "li" /* LIST_ITEM */:
-        return {};
-      case "label" /* CHECKBOX_LABEL */:
-        return {
-          for: `input_checkbox_${block.options.id}`
-        };
-      case "l" /* LIST */:
-        return {};
-    }
-    return block.options;
-  }
-  _pushBlock(block) {
-    switch (block.command) {
-      case "label" /* CHECKBOX_LABEL */:
-        this._renderOpeningTag(
-          "input",
-          {
-            type: "checkbox",
-            ...block.options,
-            id: `input_checkbox_${block.options.id}`
-          },
-          true
-        );
-        break;
-      case "code" /* CODE_BLOCK */:
-        this._renderOpeningTag("pre");
-        break;
-    }
-    if (block.command !== "table" /* TABLE */ && block.command !== "hr" /* HORIZONTAL_RULE */) {
-      this._renderOpeningTag(
-        this._tagName(block),
-        this._tagAttributes(block)
-      );
-    }
-    this._blockStack.push(block);
-  }
-  _popBlock() {
-    const block = this._blockStack.pop();
-    if (block) {
-      if (block.command !== "table" /* TABLE */) {
-        this._renderClosingTag(this._tagName(block));
-      }
-      switch (block.command) {
-        case "label" /* CHECKBOX_LABEL */:
-          this._html += "<br>";
-          return;
-        case "table" /* TABLE */:
-          if (!this._renderTable()) {
-            this._renderOpeningTag("p");
-            this._tableRows.forEach((r) => this._renderText(`${r}<br>`));
-            this._renderClosingTag("p");
-          }
-          this._tableRows = [];
-          return;
-        case "code" /* CODE_BLOCK */:
-          this._renderClosingTag("pre");
-          return;
-        case "hr" /* HORIZONTAL_RULE */:
-          this._renderOpeningTag("hr", void 0, true);
-          return;
-      }
-    }
-  }
-  _parseTableCells(row, regex) {
-    row = row.substring(1);
-    const cells = [];
-    let match;
-    while (row.length > 0 && (match = row.match(regex)) != null) {
-      cells.push(match[1]);
-      row = row.substring(match[0].length);
-    }
-    return cells;
-  }
-  _renderTable() {
-    const rows = this._tableRows;
+  renderTable(rows) {
     if (rows.length < 2) {
       return false;
     }
     const headers = this._parseTableCells(rows[0], MD_TABLE_CELL_REGEX);
     const separators = this._parseTableCells(rows[1], MD_TABLE_SEPARATOR_REGEX);
+    const alignment = separators.map((s) => {
+      const sep = s.trim();
+      const left = sep.startsWith(":");
+      const right = sep.endsWith(":");
+      if (left && !right) {
+        return "left";
+      } else if (!left && right) {
+        return "right";
+      } else if (left && right) {
+        return "center";
+      }
+      return "left";
+    });
     if (separators.length !== headers.length) {
       return false;
     }
@@ -24570,51 +24552,130 @@ class MarkdownRenderer {
     if (failed) {
       return false;
     }
-    this._renderOpeningTag("table");
-    this._renderOpeningTag("thead");
-    this._renderOpeningTag("tr");
-    headers.forEach((h) => {
-      this._renderOpeningTag("th");
-      this._renderText(h.trim());
-      this._renderClosingTag("th");
+    this.renderOpeningTag("table");
+    this.renderOpeningTag("thead");
+    this.renderOpeningTag("tr");
+    headers.forEach((h, i) => {
+      const style = `text-align: ${alignment[i]};`;
+      this.renderOpeningTag("th", { style });
+      this.renderText(h.trim());
+      this.renderClosingTag("th");
     });
-    this._renderClosingTag("tr");
-    this._renderClosingTag("thead");
-    this._renderOpeningTag("tbody");
+    this.renderClosingTag("tr");
+    this.renderClosingTag("thead");
+    this.renderOpeningTag("tbody");
     table.forEach((r) => {
-      this._renderOpeningTag("tr");
-      r.forEach((c) => {
-        this._renderOpeningTag("td");
-        this._renderText(c);
-        this._renderClosingTag("td");
+      this.renderOpeningTag("tr");
+      r.forEach((c, i) => {
+        const style = `text-align: ${alignment[i]};`;
+        this.renderOpeningTag("td", { style });
+        this.renderText(c);
+        this.renderClosingTag("td");
       });
-      this._renderClosingTag("tr");
+      this.renderClosingTag("tr");
     });
-    this._renderClosingTag("tbody");
-    this._renderClosingTag("table");
+    this.renderClosingTag("tbody");
+    this.renderClosingTag("table");
     return true;
   }
-  _renderText(text) {
-    const isCode = _.last(this._blockStack)?.command === "code" /* CODE_BLOCK */;
-    text = text.replace(MD_LINK_IMAGE_REGEX, '<img src="$2" alt="$1">').replace(MD_LINK_REGEX, '<a href="$2">$1</a>').replace(MD_BOLD_REGEX, "<b>$1</b>").replace(MD_UNDERLINE_REGEX, "<ins>$1</ins>").replace(MD_HIGHLIGHT_REGEX, "<mark>$1</mark>").replace(MD_STRIKETHROUGH_REGEX, "<del>$1</del>").replace(MD_ITALIC_REGEX, "<i>$1</i>").replace(MD_SUBSCRIPT_REGEX, "<sub>$1</sub>").replace(MD_SUPERSCRIPT_REGEX, "<sup>$1</sup>").replace(MD_CODE_REGEX, "<code>$1</code>").replace(MD_LINE_BREAK_REGEX, "<br>").replace(MD_ESCAPED_CHAR, "$1");
-    if (!isCode) {
-      text = text.trim();
+  _parseTableCells(row, regex) {
+    row = row.substring(1);
+    const cells = [];
+    let match;
+    while (row.length > 0 && (match = row.match(regex)) != null) {
+      cells.push(match[1]);
+      row = row.substring(match[0].length);
     }
-    this._html += `${text}${isCode ? "\n" : " "}`;
+    return cells;
   }
-  _renderOpeningTag(tag, props, selfClosing) {
-    const attributes = Object.entries(props ?? {}).map(([k, v]) => {
-      if (!_.isNil(v) && v !== false) {
-        return `${k}${v === true ? "" : `="${v}"`}`;
+  html() {
+    return this._html;
+  }
+  _properties(cmd) {
+    return MARKDOWN_COMMANDS[cmd];
+  }
+}
+class MarkdownRenderer {
+  _input;
+  _cursor;
+  _state;
+  constructor(input) {
+    this._input = input;
+    this._cursor = 0;
+    this._state = new MarkdownRenderState();
+  }
+  render() {
+    while (this._cursor < this._input.length) {
+      const [_2, text, commands] = this._lineCommands();
+      const diff = this._diffCommands(commands);
+      commands.slice(diff).forEach((c) => this._state.pushCommand(c));
+      const instance = this._state.peekCommand();
+      if (instance) {
+        this._properties(instance.type).onTextLine?.call(void 0, this._state, instance.state, text);
       }
-      return "";
-    }).join(" ");
-    this._html += `
-<${tag}${attributes ? ` ${attributes}` : ""}${selfClosing ? "/" : ""}>`;
+    }
+    this._diffCommands([]);
   }
-  _renderClosingTag(tag) {
-    this._html += `
-</${tag}>`;
+  html() {
+    return this._state.html();
+  }
+  domNode() {
+    const div = document.createElement("div");
+    div.innerHTML = this.html();
+    div.normalize();
+    return div;
+  }
+  _diffCommands(commands) {
+    const oldCommands = [...this._state.peekCommands()];
+    let index = 0;
+    while (index < Math.min(oldCommands.length, commands.length)) {
+      if (oldCommands[index].type !== commands[index].type) {
+        break;
+      }
+      const props = this._properties(commands[index].type);
+      if (props.isEqualToFirst && !props.isEqualToFirst(commands[index].state, oldCommands.slice(index), commands.slice(index))) {
+        break;
+      }
+      index++;
+    }
+    for (let i = 0; i < oldCommands.length - index; i++) {
+      this._state.popCommand();
+    }
+    return index;
+  }
+  _lineCommands() {
+    let remaining = this._input.substring(this._cursor);
+    let matched = "";
+    const commands = [];
+    let hasNext = false;
+    do {
+      hasNext = false;
+      for (const _cmd in MARKDOWN_COMMANDS) {
+        const cmd = _cmd;
+        const props = this._properties(cmd);
+        let match;
+        if (props.regex && (match = remaining.match(props.regex)) !== null) {
+          matched += match[0];
+          remaining = remaining.substring(match[0].length);
+          commands.push(...props.onMatch?.call(void 0, this._state, match) ?? [{
+            type: cmd,
+            state: {}
+          }]);
+          hasNext = props.stackable;
+          break;
+        }
+      }
+    } while (hasNext);
+    const endLine = remaining.indexOf("\n");
+    let text = remaining.substring(0, endLine >= 0 ? endLine : remaining.length);
+    this._cursor += matched.length + text.length + 1;
+    if (_.last(commands)?.type === "p" /* PARAGRAPH */) {
+      text = matched.charAt(matched.length - 1) + text;
+    }
+    return [matched, text, commands];
+  }
+  _properties(cmd) {
+    return MARKDOWN_COMMANDS[cmd];
   }
 }
 
@@ -24627,6 +24688,7 @@ const _sfc_main$1 = /* @__PURE__ */ defineComponent({
   setup(__props) {
     const props = __props;
     const render = () => {
+      console.clear();
       const renderer = new MarkdownRenderer(props.value);
       renderer.render();
       return renderer.html();
