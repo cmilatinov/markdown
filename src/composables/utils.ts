@@ -43,3 +43,10 @@ export function compare(node1: Node, node2: Node): boolean {
     }
     return list1.every((n, i) => compare(n, list2[i]));
 }
+
+export function escapeHTML(content: string) {
+    const text = document.createTextNode(content);
+    const p = document.createElement('p');
+    p.appendChild(text);
+    return p.innerHTML;
+}
