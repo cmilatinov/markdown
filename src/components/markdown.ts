@@ -176,7 +176,7 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
         }
     },
     [MarkdownCommand.PARAGRAPH]: {
-        regex: /^[^\S\n]*\S/,
+        regex: /^[^\S\n]*(?=\S)/,
         multiline: true,
         stackable: false,
         onMatch: () => [{type: MarkdownCommand.PARAGRAPH, state: {text: ''}}],
@@ -471,9 +471,6 @@ export class MarkdownRenderer {
         const endLine = remaining.indexOf('\n');
         let text = remaining.substring(0, endLine >= 0 ? endLine : remaining.length);
         this._cursor += matched.length + text.length + 1;
-        if (_.last(commands)?.type === MarkdownCommand.PARAGRAPH) {
-            text = matched.charAt(matched.length - 1) + text;
-        }
         return [matched, text, commands] as const;
     }
 
