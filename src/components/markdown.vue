@@ -12,6 +12,7 @@ interface Props {
 const props = defineProps<Props>();
 
 const render = () => {
+    console.clear();
     const renderer = new MarkdownRenderer(props.value);
     renderer.render();
     return renderer.html();

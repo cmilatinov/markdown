@@ -1,4 +1,6 @@
 import _ from 'lodash';
+import { escapeHTML } from '@/composables/utils';
+
 
 enum MarkdownCommand {
     PARAGRAPH = 'p',
@@ -8,299 +10,296 @@ enum MarkdownCommand {
     LIST = 'l',
     LIST_ITEM = 'li',
     TABLE = 'table',
-    CODE_BLOCK = 'code',
-    HORIZONTAL_RULE = 'hr'
+    CODE_BLOCK = 'code'
 }
 
-interface MarkdownBlock {
-    command: MarkdownCommand;
-    options?: any;
+interface MarkdownCommandProperties {
+    // [Required] The regex that triggers the start of this command.
+    regex: RegExp | null;
+    // [Required] Can this command continue after the current line?
+    multiline: boolean;
+    // [Required] Does this command allow other commands to begin after it?
+    stackable: boolean;
+
+    // Events
+    isEqualToFirst?: (
+        cmd_state: any,
+        stack: MarkdownCommandInstance[],
+        newStack: MarkdownCommandInstance[]
+    ) => boolean;
+    onMatch?: (render_state: MarkdownRenderState, match: RegExpMatchArray) => MarkdownCommandInstance[];
+    onStart?: (
+        render_state: MarkdownRenderState,
+        cmd_state: any
+    ) => void;
+    onEnd?: (
+        render_state: MarkdownRenderState,
+        cmd_state: any
+    ) => void;
+    onTextLine?: (
+        render_state: MarkdownRenderState,
+        cmd_state: any,
+        text: string
+    ) => void;
 }
 
-type MarkdownMatchBlocksFn = (renderer: MarkdownRenderer, match: RegExpMatchArray, stack: MarkdownBlock[]) => MarkdownBlock[];
+const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
+    [MarkdownCommand.CHECKBOX_LABEL]: {
+        regex: /^[^\S\n]*- \[([ x])]/,
+        multiline: false,
+        stackable: false,
+        isEqualToFirst: () => false,
+        onMatch: (state, match) => [{
+            type: MarkdownCommand.CHECKBOX_LABEL,
+            state: { id: state.uniqueId(), checked: match[1] === 'x', label: '' }
+        }],
+        onTextLine: (_, cmd, text) => {
+            cmd.label = text;
+        },
+        onEnd: (state, cmd) => {
+            const id = `input_checkbox_${cmd.id}`;
+            state.renderOpeningTag('input', { id, type: 'checkbox', checked: cmd.checked }, true);
+            state.renderOpeningTag('label', { for: id });
+            state.renderText(cmd.label.trim());
+            state.renderClosingTag('label');
+            state.renderOpeningTag('br');
+        }
+    },
+    [MarkdownCommand.BLOCKQUOTE]: {
+        regex: /^[^\S\n]*>/,
+        multiline: true,
+        stackable: true,
+        onStart: (state) => {
+            state.renderOpeningTag('blockquote');
+        },
+        onEnd: (state) => {
+            state.renderClosingTag('blockquote');
+        }
+    },
+    [MarkdownCommand.LIST]: {
+        regex: null,
+        multiline: true,
+        stackable: true,
+        isEqualToFirst: (cmd, stack, newStack) => {
+            const isLast = newStack.map(c => c.type).lastIndexOf(MarkdownCommand.LIST) === 0;
+            return !isLast || _.isEqual(stack[0]?.state, cmd);
+        },
+        onStart: (state, cmd) => {
+            const tag = cmd.ordered ? 'ol' : 'ul';
+            state.renderOpeningTag(tag);
+        },
+        onEnd: (state, cmd) => {
+            const tag = cmd.ordered ? 'ol' : 'ul';
+            state.renderClosingTag(tag);
+        }
+    },
+    [MarkdownCommand.LIST_ITEM]: {
+        regex: /^((:? {4})*)[^\S\n]*([0-9]+\.|-)/,
+        multiline: true,
+        stackable: false,
+        isEqualToFirst: (cmd, stack, newStack) => {
+            const isLast = newStack.map(c => c.type).lastIndexOf(MarkdownCommand.LIST_ITEM) === 0;
+            return !isLast || _.isEqual(stack[0]?.state, cmd);
+        },
+        onMatch: (state, match) => {
+            const indent = (match[1]?.length ?? 0) / 4;
+            return [...Array(indent + 1)].map(() => [
+                { type: MarkdownCommand.LIST, state: { ordered: match[3]?.endsWith('.') } },
+                { type: MarkdownCommand.LIST_ITEM, state: { id: state.uniqueId() } }
+            ])
+                .flat();
+        },
+        onStart: (state) => {
+            state.renderOpeningTag('li');
+        },
+        onTextLine: (state, _, text) => {
+            state.renderText(text);
+        },
+        onEnd: (state) => {
+            state.renderClosingTag('li');
+        }
+    },
+    [MarkdownCommand.TABLE]: {
+        regex: /^[^\S\n]*\|/,
+        multiline: true,
+        stackable: false,
+        onMatch: () => [{
+            type: MarkdownCommand.TABLE,
+            state: { rows: [] }
+        }],
+        onTextLine: (_, cmd, text) => {
+            cmd.rows.push(`|${text}`);
+        },
+        onEnd: (state, cmd) => {
+            if (!state.renderTable(cmd.rows)) {
+                state.renderOpeningTag('p');
+                state.renderText(cmd.rows.join('<br>'));
+                state.renderClosingTag('p');
+            }
+        }
+    },
+    [MarkdownCommand.CODE_BLOCK]: {
+        regex: /^[^\S\n]*```([\s\S]*?)```/,
+        multiline: true,
+        stackable: false,
+        onMatch: (_, match) => [{
+            type: MarkdownCommand.CODE_BLOCK,
+            state: {
+                code: match[1].trim()
+            }
+        }],
+        onEnd: (state, cmd) => {
+            state.renderOpeningTag('pre');
+            state.renderOpeningTag('code', undefined, false, false);
+            state.renderText(cmd.code, true);
+            state.renderClosingTag('code', false);
+            state.renderClosingTag('pre');
+        }
+    },
+    [MarkdownCommand.HEADING]: {
+        regex: /^[^\S\n]*(#{1,6})/,
+        multiline: false,
+        stackable: false,
+        isEqualToFirst: () => false,
+        onMatch: (_, match) => [{
+            type: MarkdownCommand.HEADING,
+            state: { n: match[1].length, text: '' }
+        }],
+        onTextLine: (_, cmd, text) => {
+            cmd.text = text;
+        },
+        onEnd: (state, cmd) => {
+            state.renderOpeningTag(`h${cmd.n}`);
+            state.renderText(cmd.text);
+            state.renderClosingTag(`h${cmd.n}`);
+        }
+    },
+    [MarkdownCommand.PARAGRAPH]: {
+        regex: /^[^\S\n]*\S/,
+        multiline: true,
+        stackable: false,
+        onMatch: () => [{ type: MarkdownCommand.PARAGRAPH, state: { text: '' } }],
+        onTextLine: (_, cmd, text) => {
+            cmd.text += `${text}\n`;
+        },
+        onEnd: (state, cmd) => {
+            state.renderOpeningTag('p');
+            state.renderText(cmd.text);
+            state.renderClosingTag('p');
+        }
+    }
+};
 
-const MD_ITALIC_REGEX = /\*(.*?)\*/g;
-const MD_SUBSCRIPT_REGEX = /_(.*?)_/g;
-const MD_SUPERSCRIPT_REGEX = /\^(.*?)\^/g;
-const MD_CODE_REGEX = /`(.*?)`/g;
-const MD_BOLD_REGEX = /\*\*(.*?)\*\*/g;
-const MD_UNDERLINE_REGEX = /__(.*?)__/g;
-const MD_HIGHLIGHT_REGEX = /==(.*?)==/g;
-const MD_STRIKETHROUGH_REGEX = /~~(.*?)~~/g;
+const MD_TABLE_CELL_REGEX = /^\s*([^|:]*)\s*\|/;
+const MD_TABLE_SEPARATOR_REGEX = /^\s*(:?-+:?)\s*\|/;
 
-const MD_LINE_BREAK_REGEX = / {2,}$/;
-const MD_LINK_REGEX = /\[(.*)]\((.*?)\)/g;
-const MD_LINK_IMAGE_REGEX = /!\[(.*?)]\((.*?)\)/g;
+interface MarkdownCommandInstance {
+    type: MarkdownCommand;
+    state: object;
+}
 
-const MD_ESCAPED_CHAR = /\\([\\`*_{}[\]<>()#+-.!|])/g;
-
-const MD_TABLE_REGEX = /^\s*\|/;
-const MD_CHECKBOX_REGEX = /^\s*- \[([ x])]/;
-const MD_HEADER_REGEX = /^\s*(#{1,6})/;
-const MD_BLOCKQUOTE_REGEX = /^\s*>/;
-const MD_UNORDERED_LIST_REGEX = /^((:?\s{4})*)\s*-/;
-const MD_ORDERED_LIST_REGEX = /^((:?\s{4})*)\s*[0-9]+\./;
-const MD_CODE_BLOCK_REGEX = /^\s*```/;
-const MD_HORIZONTAL_RULE_REGEX = /^\s*-{3,}/;
-
-const MD_TABLE_CELL_REGEX = /^\s*([^|]*)\s*\|/;
-const MD_TABLE_SEPARATOR_REGEX = /^\s*(-+)\s*\|/;
-
-const MD_COMMANDS: Array<[MarkdownCommand, RegExp, boolean, MarkdownMatchBlocksFn | null]> = [
-    [MarkdownCommand.HEADING, MD_HEADER_REGEX, false, (_, match) => ([{
-        command: MarkdownCommand.HEADING,
-        options: { n: match[1].length }
-    }])],
-    [MarkdownCommand.HORIZONTAL_RULE, MD_HORIZONTAL_RULE_REGEX, false, null],
-    [MarkdownCommand.CHECKBOX_LABEL, MD_CHECKBOX_REGEX, false, (r, match) => ([{
-        command: MarkdownCommand.CHECKBOX_LABEL,
-        options: { id: r.nextId(), checked: match[1] === 'x' }
-    }])],
-    [MarkdownCommand.TABLE, MD_TABLE_REGEX, false, null],
-    [MarkdownCommand.CODE_BLOCK, MD_CODE_BLOCK_REGEX, false, (_, match) => ([{
-        command: MarkdownCommand.CODE_BLOCK,
-        options: { code: match[1] }
-    }])],
-    [MarkdownCommand.BLOCKQUOTE, MD_BLOCKQUOTE_REGEX, true, null],
-    [MarkdownCommand.LIST, MD_UNORDERED_LIST_REGEX, false, (r, match) => {
-        const indent = (match[1]?.length ?? 0) / 4;
-        return [...Array(indent + 1)].map(() => [
-            { command: MarkdownCommand.LIST, options: { ordered: false } },
-            { command: MarkdownCommand.LIST_ITEM, options: { id: r.nextId() } }
-        ])
-            .flat();
-    }],
-    [MarkdownCommand.LIST, MD_ORDERED_LIST_REGEX, false, (r, match) => {
-        const indent = (match[1]?.length ?? 0) / 4;
-        return [...Array(indent + 1)].map(() => [
-            { command: MarkdownCommand.LIST, options: { ordered: true } },
-            { command: MarkdownCommand.LIST_ITEM, options: { id: r.nextId() } }
-        ])
-            .flat();
-    }]
-];
-
-export class MarkdownRenderer {
+class MarkdownRenderState {
     private _id: number;
-    private _input: string;
-    private _cursor: number;
     private _html: string;
-    private readonly _blockStack: MarkdownBlock[];
-    private _tableRows: string[];
+    private readonly _commandStack: MarkdownCommandInstance[];
 
-    constructor(input: string) {
-        this._id = 1;
-        this._input = input;
-        this._cursor = 0;
+    constructor() {
+        this._id = 0;
         this._html = '';
-        this._blockStack = [];
-        this._tableRows = [];
+        this._commandStack = [];
     }
 
-    public render() {
-        while (this._cursor < this._input.length) {
-            const remaining = this._input.substring(this._cursor);
-            const cr = remaining.indexOf('\n');
-            const end = cr >= 0 ? cr : remaining.length;
-            const [blocks, line, text] = this._lineCommands(remaining.substring(0, end));
-            const diff = this._diffBlocks(blocks);
-
-            // Close commands on stack
-            const nPoppedBlocks = this._blockStack.length - diff;
-            for (let i = 0; i < nPoppedBlocks; i++) {
-                this._popBlock();
-            }
-            const added = blocks.slice(diff, blocks.length);
-            added.forEach(b => this._pushBlock(b));
-
-            const command = _.last(blocks)?.command;
-            if (
-                text === '' &&
-                ([MarkdownCommand.PARAGRAPH, MarkdownCommand.LIST_ITEM] as (MarkdownCommand | undefined)[])
-                    .includes(command)
-            ) {
-                this._popBlock();
-            } else if (command === MarkdownCommand.TABLE) {
-                this._tableRows.push(`|${text}`);
-            } else if (command !== MarkdownCommand.HORIZONTAL_RULE) {
-                this._renderText(text);
-            }
-
-            this._cursor += line.length + 1;
-        }
-        while (this._blockStack.length > 0) {
-            this._popBlock();
-        }
-    }
-
-    public html() {
-        return this._html;
-    }
-
-    public domNode() {
-        const div = document.createElement('div');
-        div.innerHTML = this.html();
-        div.normalize();
-        return div;
-    }
-
-    public nextId() {
+    public uniqueId() {
         return this._id++;
     }
 
-    private _diffBlocks(blocks: MarkdownBlock[]) {
-        const oldBlocks = [...this._blockStack];
-        let index = 0;
-        while (index < Math.min(oldBlocks.length, blocks.length)) {
-            if (
-                oldBlocks[index].command !== blocks[index].command ||
-                [MarkdownCommand.HEADING,  MarkdownCommand.HORIZONTAL_RULE].includes(blocks[index].command) ||
-                (blocks[index].command === MarkdownCommand.LIST_ITEM &&
-                    blocks.map(b => b.command).lastIndexOf(MarkdownCommand.LIST_ITEM) === index &&
-                    !_.isEqual(oldBlocks[index].options, blocks[index].options)) ||
-                (blocks[index].command === MarkdownCommand.CHECKBOX_LABEL &&
-                    !_.isEqual(oldBlocks[index].options, blocks[index].options))
-            ) {
-                break;
-            }
-            index++;
-        }
-        return index;
+    public pushCommand(instance: MarkdownCommandInstance) {
+        this._commandStack.push(instance);
+        this._properties(instance.type).onStart
+            ?.call(undefined, this, instance.state);
     }
 
-    private _lineCommands(line: string): [MarkdownBlock[], string, string] {
-        const originalLine = line;
-        let blocks: MarkdownBlock[] = [];
-        let hasNext = false;
-        do {
-            hasNext = false;
-            for (const [cmd, regex, multiple, fn] of MD_COMMANDS) {
-                let match: RegExpMatchArray | null;
-                if ((match = line.match(regex)) !== null) {
-                    line = line.substring(match[0].length ?? 0);
-                    const newBlocks = fn ? fn(this, match, this._blockStack) : [{ command: cmd }];
-                    blocks.push(...newBlocks);
-                    hasNext = multiple;
-                    break;
+    public popCommand() {
+        const instance = this._commandStack.pop();
+        if (instance) {
+            this._properties(instance.type).onEnd
+                ?.call(undefined, this, instance.state);
+        }
+    }
+
+    public peekCommand(): MarkdownCommandInstance | undefined {
+        return _.last(this._commandStack);
+    }
+
+    public peekCommands(n?: number) {
+        return this._commandStack.slice(n ? -n : 0);
+    }
+
+    public renderText(text: string, escaped?: boolean) {
+        if (!escaped) {
+            text = text
+                .replace(/\*\*([\S\s]*?)\*\*/g, '<b>$1</b>')
+                .replace(/__([\S\s]*?)__/g, '<ins>$1</ins>')
+                .replace(/==([\S\s]*?)==/g, '<mark>$1</mark>')
+                .replace(/~~([\S\s]*?)~~/g, '<del>$1</del>')
+                .replace(/\*([\S\s]*?)\*/g, '<i>$1</i>')
+                .replace(/_([\S\s]*?)_/g, '<sub>$1</sub>')
+                .replace(/\^([\S\s]*?)\^/g, '<sup>$1</sup>')
+                .replace(/`([\S\s]*?)`/g, '<code>$1</code>')
+                .replace(/!\[(.*?)]\((.*?)\)/g, '<img src="$2" alt="$1">')
+                .replace(/\[(.*)]\((.*?)\)/g, '<a href="$2">$1</a>')
+                .replace(/ {2,}\n/g, '<br>')
+                .replace(/\\([\\`*_{}[\]<>()#+-.!|])/g, '$1');
+        } else {
+            text = escapeHTML(text);
+        }
+        this._html += `${text}\n`;
+    }
+
+    public renderOpeningTag(
+        tag: string,
+        attributes?: Record<string, string | boolean>,
+        selfClosing = false,
+        whitespace = true
+    ) {
+        const props = Object.entries(attributes ?? {})
+            .map(([k, v]) => {
+                if (_.isNil(v) || v === false) {
+                    return '';
                 }
-            }
-        } while (hasNext);
-        if (blocks.length === 0) {
-            if (_.last(this._blockStack)?.command == MarkdownCommand.LIST_ITEM) {
-                blocks = [...this._blockStack];
-            } else {
-                blocks.push({
-                    command: MarkdownCommand.PARAGRAPH
-                });
-            }
-        }
-        if (_.last(blocks)?.command === MarkdownCommand.BLOCKQUOTE) {
-            blocks.push({
-                command: MarkdownCommand.PARAGRAPH
-            });
-        }
-        return [blocks, originalLine, line];
+                if (v === true) {
+                    return k;
+                }
+                return `${k}="${v}"`;
+            })
+            .join(' ');
+        this._html += `<${tag}${props ? ` ${props}` : ''}${selfClosing ? '/' : ''}>${whitespace ? '\n' : ''}`;
     }
 
-    private _tagName(block: MarkdownBlock) {
-        switch (block.command) {
-            case MarkdownCommand.HEADING:
-                return `h${block.options?.n}`;
-            case MarkdownCommand.LIST:
-                return block.options?.ordered ? 'ol' : 'ul';
-        }
-        return block.command;
+    public renderClosingTag(tag: string, whitespace = true) {
+        this._html += `</${tag}>${whitespace ? '\n' : ''}`;
     }
 
-    private _tagAttributes(block: MarkdownBlock) {
-        switch (block.command) {
-            case MarkdownCommand.HEADING:
-                return {};
-            case MarkdownCommand.LIST_ITEM:
-                return {};
-            case MarkdownCommand.CHECKBOX_LABEL:
-                return {
-                    for: `input_checkbox_${block.options.id}`
-                };
-            case MarkdownCommand.LIST:
-                return {};
-        }
-        return block.options;
-    }
-
-    private _pushBlock(block: MarkdownBlock) {
-        switch (block.command) {
-            case MarkdownCommand.CHECKBOX_LABEL:
-                this._renderOpeningTag(
-                    'input',
-                    {
-                        type: 'checkbox',
-                        ...block.options,
-                        id: `input_checkbox_${block.options.id}`
-                    },
-                    true
-                );
-                break;
-            case MarkdownCommand.CODE_BLOCK:
-                this._renderOpeningTag('pre');
-                break;
-        }
-        if (block.command !== MarkdownCommand.TABLE && block.command !== MarkdownCommand.HORIZONTAL_RULE) {
-            this._renderOpeningTag(
-                this._tagName(block),
-                this._tagAttributes(block)
-            );
-        }
-        this._blockStack.push(block);
-    }
-
-    private _popBlock() {
-        const block = this._blockStack.pop();
-        if (block) {
-            if (block.command !== MarkdownCommand.TABLE) {
-                this._renderClosingTag(this._tagName(block));
-            }
-            switch (block.command) {
-                case MarkdownCommand.CHECKBOX_LABEL:
-                    this._html += '<br>';
-                    return;
-                case MarkdownCommand.TABLE:
-                    if (!this._renderTable()) {
-                        this._renderOpeningTag('p');
-                        this._tableRows.forEach(r => this._renderText(`${r}<br>`));
-                        this._renderClosingTag('p');
-                    }
-                    this._tableRows = [];
-                    return;
-                case MarkdownCommand.CODE_BLOCK:
-                    this._renderClosingTag('pre');
-                    return;
-                case MarkdownCommand.HORIZONTAL_RULE:
-                    this._renderOpeningTag('hr', undefined, true);
-                    return;
-            }
-        }
-    }
-
-    private _parseTableCells(row: string, regex: RegExp) {
-        row = row.substring(1);
-        const cells = [];
-        let match: RegExpMatchArray | null;
-        while (row.length > 0 && (match = row.match(regex)) != null) {
-            cells.push(match[1]);
-            row = row.substring(match[0].length);
-        }
-        return cells;
-    }
-
-    private _renderTable() {
-        const rows = this._tableRows;
+    public renderTable(rows: string) {
         if (rows.length < 2) {
             return false;
         }
 
         const headers = this._parseTableCells(rows[0], MD_TABLE_CELL_REGEX);
         const separators = this._parseTableCells(rows[1], MD_TABLE_SEPARATOR_REGEX);
+        const alignment = separators.map(s => {
+            const sep = s.trim();
+            const left = sep.startsWith(':');
+            const right = sep.endsWith(':');
+            if (left && !right) {
+                return 'left'
+            } else if (!left && right) {
+                return 'right';
+            } else if (left && right) {
+                return 'center';
+            }
+            return 'left';
+        });
         if (separators.length !== headers.length) {
             return false;
         }
@@ -321,66 +320,150 @@ export class MarkdownRenderer {
             return false;
         }
 
-        this._renderOpeningTag('table');
-        this._renderOpeningTag('thead');
-        this._renderOpeningTag('tr');
-        headers.forEach((h) => {
-            this._renderOpeningTag('th');
-            this._renderText(h.trim());
-            this._renderClosingTag('th');
+        this.renderOpeningTag('table');
+        this.renderOpeningTag('thead');
+        this.renderOpeningTag('tr');
+        headers.forEach((h, i) => {
+            const style = `text-align: ${alignment[i]};`;
+            this.renderOpeningTag('th', { style });
+            this.renderText(h.trim());
+            this.renderClosingTag('th');
         });
-        this._renderClosingTag('tr');
-        this._renderClosingTag('thead');
-        this._renderOpeningTag('tbody');
+        this.renderClosingTag('tr');
+        this.renderClosingTag('thead');
+
+        this.renderOpeningTag('tbody');
         table.forEach((r) => {
-            this._renderOpeningTag('tr');
-            r.forEach((c) => {
-                this._renderOpeningTag('td');
-                this._renderText(c);
-                this._renderClosingTag('td');
+            this.renderOpeningTag('tr');
+            r.forEach((c, i) => {
+                const style = `text-align: ${alignment[i]};`;
+                this.renderOpeningTag('td', { style });
+                this.renderText(c);
+                this.renderClosingTag('td');
             });
-            this._renderClosingTag('tr');
+            this.renderClosingTag('tr');
         });
-        this._renderClosingTag('tbody');
-        this._renderClosingTag('table');
+        this.renderClosingTag('tbody');
+        this.renderClosingTag('table');
 
         return true;
     }
 
-    private _renderText(text: string) {
-        const isCode = _.last(this._blockStack)?.command === MarkdownCommand.CODE_BLOCK;
-        text = text
-            .replace(MD_LINK_IMAGE_REGEX, '<img src="$2" alt="$1">')
-            .replace(MD_LINK_REGEX, '<a href="$2">$1</a>')
-            .replace(MD_BOLD_REGEX, '<b>$1</b>')
-            .replace(MD_UNDERLINE_REGEX, '<ins>$1</ins>')
-            .replace(MD_HIGHLIGHT_REGEX, '<mark>$1</mark>')
-            .replace(MD_STRIKETHROUGH_REGEX, '<del>$1</del>')
-            .replace(MD_ITALIC_REGEX, '<i>$1</i>')
-            .replace(MD_SUBSCRIPT_REGEX, '<sub>$1</sub>')
-            .replace(MD_SUPERSCRIPT_REGEX, '<sup>$1</sup>')
-            .replace(MD_CODE_REGEX, '<code>$1</code>')
-            .replace(MD_LINE_BREAK_REGEX, '<br>')
-            .replace(MD_ESCAPED_CHAR, '$1');
-        if (!isCode) {
-            text = text.trim();
+    private _parseTableCells(row: string, regex: RegExp) {
+        row = row.substring(1);
+        const cells = [];
+        let match: RegExpMatchArray | null;
+        while (row.length > 0 && (match = row.match(regex)) != null) {
+            cells.push(match[1]);
+            row = row.substring(match[0].length);
         }
-        this._html += `${text}${isCode ? '\n' : ' '}`;
+        return cells;
     }
 
-    private _renderOpeningTag(tag: string, props?: any, selfClosing?: boolean) {
-        const attributes = Object.entries(props ?? {})
-            .map(([k, v]) => {
-                if (!_.isNil(v) && v !== false) {
-                    return `${k}${v === true ? '' : `="${v}"`}`;
+    public html() {
+        return this._html;
+    }
+
+    private _properties(cmd: MarkdownCommand) {
+        return MARKDOWN_COMMANDS[cmd];
+    }
+}
+
+
+export class MarkdownRenderer {
+    private readonly _input: string;
+    private _cursor: number;
+    private readonly _state: MarkdownRenderState;
+
+    constructor(input: string) {
+        this._input = input;
+        this._cursor = 0;
+        this._state = new MarkdownRenderState();
+    }
+
+    public render() {
+        while (this._cursor < this._input.length) {
+            const [_, text, commands] = this._lineCommands();
+            // console.log(`[${commands.map(c =>
+            //     `${c.type}${JSON.stringify(c.state)}`).join(' > ')}] "${text}"`
+            // );
+            const diff = this._diffCommands(commands);
+            commands.slice(diff).forEach(c => this._state.pushCommand(c));
+            const instance = this._state.peekCommand();
+            if (instance) {
+                this._properties(instance.type).onTextLine
+                    ?.call(undefined, this._state, instance.state, text);
+            }
+        }
+        this._diffCommands([]);
+    }
+
+    public html() {
+        return this._state.html();
+    }
+
+    public domNode() {
+        const div = document.createElement('div');
+        div.innerHTML = this.html();
+        div.normalize();
+        return div;
+    }
+
+    private _diffCommands(commands: MarkdownCommandInstance[]) {
+        const oldCommands = [...this._state.peekCommands()];
+        let index = 0;
+        while (index < Math.min(oldCommands.length, commands.length)) {
+            if (oldCommands[index].type !== commands[index].type) {
+                break;
+            }
+            const props = this._properties(commands[index].type);
+            if (
+                props.isEqualToFirst &&
+                !props.isEqualToFirst(commands[index].state, oldCommands.slice(index), commands.slice(index))
+            ) {
+                break;
+            }
+            index++;
+        }
+        for (let i = 0; i < oldCommands.length - index; i++) {
+            this._state.popCommand();
+        }
+        return index;
+    }
+
+    private _lineCommands() {
+        let remaining = this._input.substring(this._cursor);
+        let matched = '';
+        const commands: MarkdownCommandInstance[] = [];
+        let hasNext = false;
+        do {
+            hasNext = false;
+            for (const _cmd in MARKDOWN_COMMANDS) {
+                const cmd = _cmd as MarkdownCommand;
+                const props = this._properties(cmd);
+                let match: RegExpMatchArray | null;
+                if (props.regex && (match = remaining.match(props.regex)) !== null) {
+                    matched += match[0];
+                    remaining = remaining.substring(match[0].length);
+                    commands.push(...(props.onMatch?.call(undefined, this._state, match) ?? [{
+                        type: cmd,
+                        state: {}
+                    }]));
+                    hasNext = props.stackable;
+                    break;
                 }
-                return '';
-            })
-            .join(' ');
-        this._html += `\n<${tag}${attributes ? ` ${attributes}` : ''}${selfClosing ? '/' : ''}>`;
+            }
+        } while (hasNext);
+        const endLine = remaining.indexOf('\n');
+        let text = remaining.substring(0, endLine >= 0 ? endLine : remaining.length);
+        this._cursor += matched.length + text.length + 1;
+        if (_.last(commands)?.type === MarkdownCommand.PARAGRAPH) {
+           text = matched.charAt(matched.length - 1) + text;
+        }
+        return [matched, text, commands] as const;
     }
 
-    private _renderClosingTag(tag: string) {
-        this._html += `\n</${tag}>`;
+    private _properties(cmd: MarkdownCommand) {
+        return MARKDOWN_COMMANDS[cmd];
     }
 }
