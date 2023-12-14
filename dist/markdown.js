@@ -24305,38 +24305,52 @@ lodash.exports;
 var lodashExports = lodash.exports;
 const _ = /*@__PURE__*/getDefaultExportFromCjs(lodashExports);
 
-const MD_ITALIC_N_BOLD_REGEX1 = /\*\*\*([\s\S]+?)\*\*\*/g;
-const MD_ITALIC_N_BOLD_REGEX2 = /___([\s\S]+?)___/g;
-const MD_BOLD_REGEX1 = /\*\*([\s\S]+?)\*\*/g;
-const MD_BOLD_REGEX2 = /__([\s\S]+?)__/g;
-const MD_ITALIC_REGEX1 = /\*([\s\S]+?)\*/g;
-const MD_ITALIC_REGEX2 = /_([\s\S]+?)_/g;
+const MD_ITALIC_REGEX = /\*(.*?)\*/g;
+const MD_SUBSCRIPT_REGEX = /_(.*?)_/g;
+const MD_SUPERSCRIPT_REGEX = /\^(.*?)\^/g;
+const MD_CODE_REGEX = /`(.*?)`/g;
+const MD_BOLD_REGEX = /\*\*(.*?)\*\*/g;
+const MD_UNDERLINE_REGEX = /__(.*?)__/g;
+const MD_HIGHLIGHT_REGEX = /==(.*?)==/g;
+const MD_STRIKETHROUGH_REGEX = /~~(.*?)~~/g;
 const MD_LINE_BREAK_REGEX = / {2,}$/;
 const MD_LINK_REGEX = /\[(.*)]\((.*?)\)/g;
 const MD_LINK_IMAGE_REGEX = /!\[(.*?)]\((.*?)\)/g;
+const MD_ESCAPED_CHAR = /\\([\\`*_{}[\]<>()#+-.!|])/g;
+const MD_TABLE_REGEX = /^\s*\|/;
 const MD_CHECKBOX_REGEX = /^\s*- \[([ x])]/;
 const MD_HEADER_REGEX = /^\s*(#{1,6})/;
 const MD_BLOCKQUOTE_REGEX = /^\s*>/;
 const MD_UNORDERED_LIST_REGEX = /^((:?\s{4})*)\s*-/;
 const MD_ORDERED_LIST_REGEX = /^((:?\s{4})*)\s*[0-9]+\./;
+const MD_CODE_BLOCK_REGEX = /^\s*```/;
+const MD_HORIZONTAL_RULE_REGEX = /^\s*-{3,}/;
+const MD_TABLE_CELL_REGEX = /^\s*([^|]*)\s*\|/;
+const MD_TABLE_SEPARATOR_REGEX = /^\s*(-+)\s*\|/;
 const MD_COMMANDS = [
-  ["h" /* HEADING */, MD_HEADER_REGEX, (_2, match) => [{
+  ["h" /* HEADING */, MD_HEADER_REGEX, false, (_2, match) => [{
     command: "h" /* HEADING */,
     options: { n: match[1].length }
   }]],
-  ["label" /* CHECKBOX_LABEL */, MD_CHECKBOX_REGEX, (r, match) => [{
+  ["hr" /* HORIZONTAL_RULE */, MD_HORIZONTAL_RULE_REGEX, false, null],
+  ["label" /* CHECKBOX_LABEL */, MD_CHECKBOX_REGEX, false, (r, match) => [{
     command: "label" /* CHECKBOX_LABEL */,
     options: { id: r.nextId(), checked: match[1] === "x" }
   }]],
-  ["blockquote" /* BLOCKQUOTE */, MD_BLOCKQUOTE_REGEX, null],
-  ["l" /* LIST */, MD_UNORDERED_LIST_REGEX, (r, match) => {
+  ["table" /* TABLE */, MD_TABLE_REGEX, false, null],
+  ["code" /* CODE_BLOCK */, MD_CODE_BLOCK_REGEX, false, (_2, match) => [{
+    command: "code" /* CODE_BLOCK */,
+    options: { code: match[1] }
+  }]],
+  ["blockquote" /* BLOCKQUOTE */, MD_BLOCKQUOTE_REGEX, true, null],
+  ["l" /* LIST */, MD_UNORDERED_LIST_REGEX, false, (r, match) => {
     const indent = (match[1]?.length ?? 0) / 4;
     return [...Array(indent + 1)].map(() => [
       { command: "l" /* LIST */, options: { ordered: false } },
       { command: "li" /* LIST_ITEM */, options: { id: r.nextId() } }
     ]).flat();
   }],
-  ["l" /* LIST */, MD_ORDERED_LIST_REGEX, (r, match) => {
+  ["l" /* LIST */, MD_ORDERED_LIST_REGEX, false, (r, match) => {
     const indent = (match[1]?.length ?? 0) / 4;
     return [...Array(indent + 1)].map(() => [
       { command: "l" /* LIST */, options: { ordered: true } },
@@ -24350,12 +24364,14 @@ class MarkdownRenderer {
   _cursor;
   _html;
   _blockStack;
+  _tableRows;
   constructor(input) {
     this._id = 1;
     this._input = input;
     this._cursor = 0;
     this._html = "";
     this._blockStack = [];
+    this._tableRows = [];
   }
   render() {
     while (this._cursor < this._input.length) {
@@ -24370,9 +24386,12 @@ class MarkdownRenderer {
       }
       const added = blocks.slice(diff, blocks.length);
       added.forEach((b) => this._pushBlock(b));
-      if (text === "" && ["p" /* PARAGRAPH */, "li" /* LIST_ITEM */].includes(_.last(blocks)?.command)) {
+      const command = _.last(blocks)?.command;
+      if (text === "" && ["p" /* PARAGRAPH */, "li" /* LIST_ITEM */].includes(command)) {
         this._popBlock();
-      } else {
+      } else if (command === "table" /* TABLE */) {
+        this._tableRows.push(`|${text}`);
+      } else if (command !== "hr" /* HORIZONTAL_RULE */) {
         this._renderText(text);
       }
       this._cursor += line.length + 1;
@@ -24397,7 +24416,7 @@ class MarkdownRenderer {
     const oldBlocks = [...this._blockStack];
     let index = 0;
     while (index < Math.min(oldBlocks.length, blocks.length)) {
-      if (oldBlocks[index].command !== blocks[index].command || blocks[index].command === "li" /* LIST_ITEM */ && blocks.map((b) => b.command).lastIndexOf("li" /* LIST_ITEM */) === index && !_.isEqual(oldBlocks[index].options, blocks[index].options) || blocks[index].command === "h" /* HEADING */ || blocks[index].command === "label" /* CHECKBOX_LABEL */ && !_.isEqual(oldBlocks[index].options, blocks[index].options)) {
+      if (oldBlocks[index].command !== blocks[index].command || ["h" /* HEADING */, "hr" /* HORIZONTAL_RULE */].includes(blocks[index].command) || blocks[index].command === "li" /* LIST_ITEM */ && blocks.map((b) => b.command).lastIndexOf("li" /* LIST_ITEM */) === index && !_.isEqual(oldBlocks[index].options, blocks[index].options) || blocks[index].command === "label" /* CHECKBOX_LABEL */ && !_.isEqual(oldBlocks[index].options, blocks[index].options)) {
         break;
       }
       index++;
@@ -24410,13 +24429,14 @@ class MarkdownRenderer {
     let hasNext = false;
     do {
       hasNext = false;
-      for (const [cmd, regex, fn] of MD_COMMANDS) {
+      for (const [cmd, regex, multiple, fn] of MD_COMMANDS) {
         let match;
         if ((match = line.match(regex)) !== null) {
           line = line.substring(match[0].length ?? 0);
           const newBlocks = fn ? fn(this, match, this._blockStack) : [{ command: cmd }];
           blocks.push(...newBlocks);
-          hasNext = true;
+          hasNext = multiple;
+          break;
         }
       }
     } while (hasNext);
@@ -24455,39 +24475,128 @@ class MarkdownRenderer {
         return {
           for: `input_checkbox_${block.options.id}`
         };
+      case "l" /* LIST */:
+        return {};
     }
     return block.options;
   }
   _pushBlock(block) {
-    if (block.command === "label" /* CHECKBOX_LABEL */) {
+    switch (block.command) {
+      case "label" /* CHECKBOX_LABEL */:
+        this._renderOpeningTag(
+          "input",
+          {
+            type: "checkbox",
+            ...block.options,
+            id: `input_checkbox_${block.options.id}`
+          },
+          true
+        );
+        break;
+      case "code" /* CODE_BLOCK */:
+        this._renderOpeningTag("pre");
+        break;
+    }
+    if (block.command !== "table" /* TABLE */ && block.command !== "hr" /* HORIZONTAL_RULE */) {
       this._renderOpeningTag(
-        "input",
-        {
-          type: "checkbox",
-          ...block.options,
-          id: `input_checkbox_${block.options.id}`
-        },
-        true
+        this._tagName(block),
+        this._tagAttributes(block)
       );
     }
-    this._renderOpeningTag(
-      this._tagName(block),
-      this._tagAttributes(block)
-    );
     this._blockStack.push(block);
   }
   _popBlock() {
     const block = this._blockStack.pop();
     if (block) {
-      this._renderClosingTag(this._tagName(block));
-      if (block.command === "label" /* CHECKBOX_LABEL */) {
-        this._html += "<br>";
+      if (block.command !== "table" /* TABLE */) {
+        this._renderClosingTag(this._tagName(block));
+      }
+      switch (block.command) {
+        case "label" /* CHECKBOX_LABEL */:
+          this._html += "<br>";
+          return;
+        case "table" /* TABLE */:
+          if (!this._renderTable()) {
+            this._renderOpeningTag("p");
+            this._tableRows.forEach((r) => this._renderText(`${r}<br>`));
+            this._renderClosingTag("p");
+          }
+          this._tableRows = [];
+          return;
+        case "code" /* CODE_BLOCK */:
+          this._renderClosingTag("pre");
+          return;
+        case "hr" /* HORIZONTAL_RULE */:
+          this._renderOpeningTag("hr", void 0, true);
+          return;
       }
     }
   }
+  _parseTableCells(row, regex) {
+    row = row.substring(1);
+    const cells = [];
+    let match;
+    while (row.length > 0 && (match = row.match(regex)) != null) {
+      cells.push(match[1]);
+      row = row.substring(match[0].length);
+    }
+    return cells;
+  }
+  _renderTable() {
+    const rows = this._tableRows;
+    if (rows.length < 2) {
+      return false;
+    }
+    const headers = this._parseTableCells(rows[0], MD_TABLE_CELL_REGEX);
+    const separators = this._parseTableCells(rows[1], MD_TABLE_SEPARATOR_REGEX);
+    if (separators.length !== headers.length) {
+      return false;
+    }
+    const table = [];
+    let failed = false;
+    for (let i = 2; i < rows.length; i++) {
+      const cells = this._parseTableCells(rows[i], MD_TABLE_CELL_REGEX);
+      if (cells.length !== headers.length) {
+        failed = true;
+        break;
+      } else {
+        table.push(cells);
+      }
+    }
+    if (failed) {
+      return false;
+    }
+    this._renderOpeningTag("table");
+    this._renderOpeningTag("thead");
+    this._renderOpeningTag("tr");
+    headers.forEach((h) => {
+      this._renderOpeningTag("th");
+      this._renderText(h.trim());
+      this._renderClosingTag("th");
+    });
+    this._renderClosingTag("tr");
+    this._renderClosingTag("thead");
+    this._renderOpeningTag("tbody");
+    table.forEach((r) => {
+      this._renderOpeningTag("tr");
+      r.forEach((c) => {
+        this._renderOpeningTag("td");
+        this._renderText(c);
+        this._renderClosingTag("td");
+      });
+      this._renderClosingTag("tr");
+    });
+    this._renderClosingTag("tbody");
+    this._renderClosingTag("table");
+    return true;
+  }
   _renderText(text) {
-    text = text.replace(MD_LINK_IMAGE_REGEX, '<img src="$2" alt="$1">').replace(MD_LINK_REGEX, '<a href="$2">$1</a>').replace(MD_ITALIC_N_BOLD_REGEX1, "<i><b>$1</b></i>").replace(MD_ITALIC_N_BOLD_REGEX2, "<i><b>$1</b></i>").replace(MD_BOLD_REGEX1, "<b>$1</b>").replace(MD_BOLD_REGEX2, "<b>$1</b>").replace(MD_ITALIC_REGEX1, "<i>$1</i>").replace(MD_ITALIC_REGEX2, "<i>$1</i>").replace(MD_LINE_BREAK_REGEX, "<br>").trim();
-    this._html += `${text} `;
+    const isCode = _.last(this._blockStack)?.command === "code" /* CODE_BLOCK */;
+    text = text.replace(MD_LINK_IMAGE_REGEX, '<img src="$2" alt="$1">').replace(MD_LINK_REGEX, '<a href="$2">$1</a>').replace(MD_BOLD_REGEX, "<b>$1</b>").replace(MD_UNDERLINE_REGEX, "<ins>$1</ins>").replace(MD_HIGHLIGHT_REGEX, "<mark>$1</mark>").replace(MD_STRIKETHROUGH_REGEX, "<del>$1</del>").replace(MD_ITALIC_REGEX, "<i>$1</i>").replace(MD_SUBSCRIPT_REGEX, "<sub>$1</sub>").replace(MD_SUPERSCRIPT_REGEX, "<sup>$1</sup>").replace(MD_CODE_REGEX, "<code>$1</code>").replace(MD_LINE_BREAK_REGEX, "<br>").replace(MD_ESCAPED_CHAR, "$1");
+    if (!isCode) {
+      text = text.trim();
+    }
+    this._html += `${text}${isCode ? "\n" : " "}`;
   }
   _renderOpeningTag(tag, props, selfClosing) {
     const attributes = Object.entries(props ?? {}).map(([k, v]) => {
@@ -24505,7 +24614,7 @@ class MarkdownRenderer {
   }
 }
 
-const _hoisted_1 = ["innerHTML"];
+const _hoisted_1$1 = ["innerHTML"];
 const _sfc_main$1 = /* @__PURE__ */ defineComponent({
   __name: "markdown",
   props: {
@@ -24521,24 +24630,29 @@ const _sfc_main$1 = /* @__PURE__ */ defineComponent({
     return (_ctx, _cache) => {
       return openBlock(), createElementBlock("div", {
         innerHTML: render()
-      }, null, 8, _hoisted_1);
+      }, null, 8, _hoisted_1$1);
     };
   }
 });
 
+const _hoisted_1 = { class: "flex h-[100vh]" };
 const _sfc_main = /* @__PURE__ */ defineComponent({
   __name: "App",
   setup(__props) {
     const md = ref("");
     return (_ctx, _cache) => {
-      return openBlock(), createElementBlock(Fragment, null, [
+      return openBlock(), createElementBlock("main", _hoisted_1, [
         withDirectives(createBaseVNode("textarea", {
+          class: "flex-1 max-h-full overflow-auto font-mono p-3",
           "onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => md.value = $event)
         }, null, 512), [
           [vModelText, md.value]
         ]),
-        createVNode(_sfc_main$1, { value: md.value }, null, 8, ["value"])
-      ], 64);
+        createVNode(_sfc_main$1, {
+          class: "flex-1 px-4 max-h-full overflow-auto prose p-3",
+          value: md.value
+        }, null, 8, ["value"])
+      ]);
     };
   }
 });
