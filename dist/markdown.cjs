@@ -24429,19 +24429,20 @@ const MARKDOWN_COMMANDS = {
     }
   },
   ["h" /* HEADING */]: {
-    regex: /^[^\S\n]*(#{1,6})/,
+    regex: /^[^\S\n]*(#{1,6})(.*?)(\{.*})?$/m,
     multiline: false,
     stackable: false,
     isEqualToFirst: () => false,
     onMatch: (_2, match) => [{
       type: "h" /* HEADING */,
-      state: { n: match[1].length, text: "" }
+      state: {
+        n: match[1].length,
+        text: match[2],
+        id: match[3] ? match[3].substring(1, match[3].length - 1) : void 0
+      }
     }],
-    onTextLine: (_2, cmd, text) => {
-      cmd.text = text;
-    },
     onEnd: (state, cmd) => {
-      state.renderOpeningTag(`h${cmd.n}`);
+      state.renderOpeningTag(`h${cmd.n}`, { id: cmd.id });
       state.renderText(cmd.text);
       state.renderClosingTag(`h${cmd.n}`);
     }
@@ -24494,7 +24495,20 @@ class MarkdownRenderState {
   }
   renderText(text, escaped) {
     if (!escaped) {
-      text = text.replace(/\*\*([\S\s]*?)\*\*/g, "<b>$1</b>").replace(/__([\S\s]*?)__/g, "<ins>$1</ins>").replace(/==([\S\s]*?)==/g, "<mark>$1</mark>").replace(/~~([\S\s]*?)~~/g, "<del>$1</del>").replace(/\*([\S\s]*?)\*/g, "<i>$1</i>").replace(/_([\S\s]*?)_/g, "<sub>$1</sub>").replace(/\^([\S\s]*?)\^/g, "<sup>$1</sup>").replace(/`([\S\s]*?)`/g, "<code>$1</code>").replace(/!\[(.*?)]\((.*?)\)/g, '<img src="$2" alt="$1">').replace(/\[(.*)]\((.*?)\)/g, '<a href="$2">$1</a>').replace(/ {2,}\n/g, "<br>").replace(/\\([\\`*_{}[\]<>()#+-.!|])/g, "$1");
+      let match;
+      while ((match = text.match(/!\[(.*?)]\((.*?)\)(\{.*?})?/)) !== null) {
+        let rendered_text = "";
+        const id = match[3] ? `id="${match[3].substring(1, match[3].length - 1)}"` : "";
+        if (match[1] == "") {
+          rendered_text = `<img src="${match[2]}" ${id}/>`;
+        } else {
+          rendered_text = `<figure><img src="${match[2]}" alt="${match[1]}" ${id}/><figcaption>${match[1]}</figcaption></figure>`;
+        }
+        text = text.substring(0, match.index) + rendered_text + text.substring((match.index ?? 0) + match[0].length);
+        console.log(match);
+        console.log(text);
+      }
+      text = text.replace(/\*\*([\S\s]*?)\*\*/g, "<b>$1</b>").replace(/__([\S\s]*?)__/g, "<ins>$1</ins>").replace(/==([\S\s]*?)==/g, "<mark>$1</mark>").replace(/~~([\S\s]*?)~~/g, "<del>$1</del>").replace(/\*([\S\s]*?)\*/g, "<i>$1</i>").replace(/_([\S\s]*?)_/g, "<sub>$1</sub>").replace(/\^([\S\s]*?)\^/g, "<sup>$1</sup>").replace(/`([\S\s]*?)`/g, "<code>$1</code>").replace(/\[(.*)]\((.*?)\)/g, '<a href="$2">$1</a>').replace(/ {2,}\n/g, "<br>").replace(/\\([\\`*_{}[\]<>()#+-.!|])/g, "$1");
     } else {
       text = escapeHTML(text);
     }
