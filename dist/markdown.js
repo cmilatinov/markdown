@@ -24345,6 +24345,14 @@ const MARKDOWN_COMMANDS = {
       state.renderClosingTag("blockquote");
     }
   },
+  ["hr" /* HORIZONTAL_RULE */]: {
+    regex: /^[^\S\n]*-{3,}/,
+    multiline: false,
+    stackable: false,
+    onEnd: (state) => {
+      state.renderOpeningTag("hr", void 0, true);
+    }
+  },
   ["l" /* LIST */]: {
     regex: null,
     multiline: true,
@@ -24363,7 +24371,7 @@ const MARKDOWN_COMMANDS = {
     }
   },
   ["li" /* LIST_ITEM */]: {
-    regex: /^((:? {4})*)[^\S\n]*([0-9]+\.|-)/,
+    regex: /^((:? {4})*)[^\S\n]*([0-9]+\.|-)[^\S\n]/,
     multiline: true,
     stackable: false,
     isEqualToFirst: (cmd, stack, newStack) => {
@@ -24444,16 +24452,30 @@ const MARKDOWN_COMMANDS = {
     }
   },
   ["p" /* PARAGRAPH */]: {
-    regex: /^[^\S\n]*(?=\S)/,
+    regex: /^[^\S\n]*(:?(:::|:--|--:|:-:)[^\S\n])?(?=\S)/,
     multiline: true,
     stackable: false,
-    onMatch: () => [{ type: "p" /* PARAGRAPH */, state: { text: "" } }],
+    isEqualToFirst: (cmd, stack) => {
+      return cmd.align === void 0 || stack[0].state.align === cmd.align;
+    },
+    onMatch: (_2, match) => [{
+      type: "p" /* PARAGRAPH */,
+      state: {
+        text: "",
+        align: {
+          ":::": "justify" /* JUSTIFY */,
+          ":--": "left" /* LEFT */,
+          "--:": "right" /* RIGHT */,
+          ":-:": "center" /* CENTER */
+        }[match[1]?.substring(0, 3)]
+      }
+    }],
     onTextLine: (_2, cmd, text) => {
       cmd.text += `${text}
 `;
     },
     onEnd: (state, cmd) => {
-      state.renderOpeningTag("p");
+      state.renderOpeningTag("p", { style: `text-align: ${cmd.align};` });
       state.renderText(cmd.text);
       state.renderClosingTag("p");
     }
@@ -24461,6 +24483,7 @@ const MARKDOWN_COMMANDS = {
 };
 const MD_TABLE_CELL_REGEX = /^\s*([^|:]*)\s*\|/;
 const MD_TABLE_SEPARATOR_REGEX = /^\s*(:?-+:?)\s*\|/;
+const MD_TABLE_ID_REGEX = /^[^\S\n]*(\{.*?})(?=\n|$)/;
 class MarkdownRenderState {
   _id;
   _html;
@@ -24530,20 +24553,25 @@ class MarkdownRenderState {
     if (rows.length < 2) {
       return false;
     }
-    const headers = this._parseTableCells(rows[0], MD_TABLE_CELL_REGEX);
+    let id = void 0;
+    const headers = this._parseTableCells(rows[0], MD_TABLE_CELL_REGEX, MD_TABLE_ID_REGEX);
+    if (_.last(headers)?.startsWith("{") && _.last(headers)?.endsWith("}")) {
+      id = headers.pop();
+      id = id.substring(1, id.length - 1);
+    }
     const separators = this._parseTableCells(rows[1], MD_TABLE_SEPARATOR_REGEX);
     const alignment = separators.map((s) => {
       const sep = s.trim();
       const left = sep.startsWith(":");
       const right = sep.endsWith(":");
       if (left && !right) {
-        return "left";
+        return "left" /* LEFT */;
       } else if (!left && right) {
-        return "right";
+        return "right" /* RIGHT */;
       } else if (left && right) {
-        return "center";
+        return "center" /* CENTER */;
       }
-      return "left";
+      return "left" /* LEFT */;
     });
     if (separators.length !== headers.length) {
       return false;
@@ -24562,7 +24590,7 @@ class MarkdownRenderState {
     if (failed) {
       return false;
     }
-    this.renderOpeningTag("table");
+    this.renderOpeningTag("table", { id });
     this.renderOpeningTag("thead");
     this.renderOpeningTag("tr");
     headers.forEach((h, i) => {
@@ -24588,13 +24616,16 @@ class MarkdownRenderState {
     this.renderClosingTag("table");
     return true;
   }
-  _parseTableCells(row, regex) {
+  _parseTableCells(row, regex, endRegex) {
     row = row.substring(1);
     const cells = [];
     let match;
     while (row.length > 0 && (match = row.match(regex)) != null) {
       cells.push(match[1]);
       row = row.substring(match[0].length);
+    }
+    if (endRegex && (match = row.match(endRegex)) !== null) {
+      cells.push(match[1]);
     }
     return cells;
   }
@@ -24616,7 +24647,10 @@ class MarkdownRenderer {
   }
   render() {
     while (this._cursor < this._input.length) {
-      const [_2, text, commands] = this._lineCommands();
+      const [text, commands] = this._lineCommands();
+      console.log(
+        `[${commands.map((c) => `${c.type}${JSON.stringify(c.state)}`).join(" > ")}] "${text}"`
+      );
       const diff = this._diffCommands(commands);
       commands.slice(diff).forEach((c) => this._state.pushCommand(c));
       const instance = this._state.peekCommand();
@@ -24677,9 +24711,9 @@ class MarkdownRenderer {
       }
     } while (hasNext);
     const endLine = remaining.indexOf("\n");
-    let text = remaining.substring(0, endLine >= 0 ? endLine : remaining.length);
+    const text = remaining.substring(0, endLine >= 0 ? endLine : remaining.length);
     this._cursor += matched.length + text.length + 1;
-    return [matched, text, commands];
+    return [text, commands];
   }
   _properties(cmd) {
     return MARKDOWN_COMMANDS[cmd];
