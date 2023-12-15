@@ -24319,7 +24319,6 @@ function escapeHTML(content) {
 const MARKDOWN_COMMANDS = {
   ["label" /* CHECKBOX_LABEL */]: {
     regex: /^[^\S\n]*- \[([ x])]/,
-    multiline: false,
     stackable: false,
     isEqualToFirst: () => false,
     onMatch: (state, match) => [{
@@ -24340,7 +24339,6 @@ const MARKDOWN_COMMANDS = {
   },
   ["blockquote" /* BLOCKQUOTE */]: {
     regex: /^[^\S\n]*>/,
-    multiline: true,
     stackable: true,
     onStart: (state) => {
       state.renderOpeningTag("blockquote");
@@ -24351,7 +24349,6 @@ const MARKDOWN_COMMANDS = {
   },
   ["hr" /* HORIZONTAL_RULE */]: {
     regex: /^[^\S\n]*-{3,}/,
-    multiline: false,
     stackable: false,
     onEnd: (state) => {
       state.renderOpeningTag("hr", void 0, true);
@@ -24359,7 +24356,6 @@ const MARKDOWN_COMMANDS = {
   },
   ["l" /* LIST */]: {
     regex: null,
-    multiline: true,
     stackable: true,
     isEqualToFirst: (cmd, stack, newStack) => {
       const isLast = newStack.map((c) => c.type).lastIndexOf("l" /* LIST */) === 0;
@@ -24376,7 +24372,6 @@ const MARKDOWN_COMMANDS = {
   },
   ["li" /* LIST_ITEM */]: {
     regex: /^((:? {4})*)[^\S\n]*([0-9]+\.|-)[^\S\n]/,
-    multiline: true,
     stackable: false,
     isEqualToFirst: (cmd, stack, newStack) => {
       const isLast = newStack.map((c) => c.type).lastIndexOf("li" /* LIST_ITEM */) === 0;
@@ -24401,7 +24396,6 @@ const MARKDOWN_COMMANDS = {
   },
   ["table" /* TABLE */]: {
     regex: /^[^\S\n]*\|/,
-    multiline: true,
     stackable: false,
     onMatch: () => [{
       type: "table" /* TABLE */,
@@ -24420,7 +24414,6 @@ const MARKDOWN_COMMANDS = {
   },
   ["code" /* CODE_BLOCK */]: {
     regex: /^[^\S\n]*```([\s\S]*?)```/,
-    multiline: true,
     stackable: false,
     onMatch: (_2, match) => [{
       type: "code" /* CODE_BLOCK */,
@@ -24436,9 +24429,17 @@ const MARKDOWN_COMMANDS = {
       state.renderClosingTag("pre");
     }
   },
+  ["page" /* PAGE_BREAK */]: {
+    regex: /^[^\S\n]*={3,}/,
+    stackable: false,
+    isEqualToFirst: () => false,
+    onStart: (state) => {
+      state.renderOpeningTag("div", { class: "pagebreak" });
+      state.renderClosingTag("div");
+    }
+  },
   ["h" /* HEADING */]: {
     regex: /^[^\S\n]*(#{1,6})(.*?)(\{.*})?(?=\n|$)/,
-    multiline: false,
     stackable: false,
     isEqualToFirst: () => false,
     onMatch: (_2, match) => [{
@@ -24457,7 +24458,6 @@ const MARKDOWN_COMMANDS = {
   },
   ["p" /* PARAGRAPH */]: {
     regex: /^[^\S\n]*(:?(:::|:--|--:|:-:)[^\S\n])?(?=\S)/,
-    multiline: true,
     stackable: false,
     isEqualToFirst: (cmd, stack) => {
       return cmd.align === void 0 || stack[0].state.align === cmd.align;
@@ -24479,7 +24479,7 @@ const MARKDOWN_COMMANDS = {
 `;
     },
     onEnd: (state, cmd) => {
-      state.renderOpeningTag("p", { style: `text-align: ${cmd.align};` });
+      state.renderOpeningTag("p", { style: `text-align: ${cmd.align ?? "left"};` });
       state.renderText(cmd.text);
       state.renderClosingTag("p");
     }
@@ -24520,16 +24520,14 @@ class MarkdownRenderState {
     if (!escaped) {
       let match;
       while ((match = text.match(/!\[(.*?)]\((.*?)\)(\{.*?})?/)) !== null) {
-        let rendered_text = "";
+        let renderedText = "";
         const id = match[3] ? `id="${match[3].substring(1, match[3].length - 1)}"` : "";
         if (match[1] == "") {
-          rendered_text = `<img src="${match[2]}" ${id}/>`;
+          renderedText = `<img src="${match[2]}" ${id}/>`;
         } else {
-          rendered_text = `<figure><img src="${match[2]}" alt="${match[1]}" ${id}/><figcaption>${match[1]}</figcaption></figure>`;
+          renderedText = `<figure><img src="${match[2]}" alt="${match[1]}" ${id}/><figcaption>${match[1]}</figcaption></figure>`;
         }
-        text = text.substring(0, match.index) + rendered_text + text.substring((match.index ?? 0) + match[0].length);
-        console.log(match);
-        console.log(text);
+        text = text.substring(0, match.index) + renderedText + text.substring((match.index ?? 0) + match[0].length);
       }
       text = text.replace(/\*\*([\S\s]*?)\*\*/g, "<b>$1</b>").replace(/__([\S\s]*?)__/g, "<ins>$1</ins>").replace(/==([\S\s]*?)==/g, "<mark>$1</mark>").replace(/~~([\S\s]*?)~~/g, "<del>$1</del>").replace(/\*([\S\s]*?)\*/g, "<i>$1</i>").replace(/_([\S\s]*?)_/g, "<sub>$1</sub>").replace(/\^([\S\s]*?)\^/g, "<sup>$1</sup>").replace(/`([\S\s]*?)`/g, "<code>$1</code>").replace(/\[(.*)]\((.*?)\)/g, '<a href="$2">$1</a>').replace(/ {2,}\n/g, "<br>").replace(/\\([\\`*_{}[\]<>()#+-.!|])/g, "$1");
     } else {
@@ -24652,9 +24650,6 @@ class MarkdownRenderer {
   render() {
     while (this._cursor < this._input.length) {
       const [text, commands] = this._lineCommands();
-      console.log(
-        `[${commands.map((c) => `${c.type}${JSON.stringify(c.state)}`).join(" > ")}] "${text}"`
-      );
       const diff = this._diffCommands(commands);
       commands.slice(diff).forEach((c) => this._state.pushCommand(c));
       const instance = this._state.peekCommand();
