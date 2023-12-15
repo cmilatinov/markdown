@@ -17,14 +17,13 @@ enum MarkdownCommand {
     LIST_ITEM = 'li',
     TABLE = 'table',
     CODE_BLOCK = 'code',
-    HORIZONTAL_RULE = 'hr'
+    HORIZONTAL_RULE = 'hr',
+    PAGE_BREAK = 'page'
 }
 
 interface MarkdownCommandProperties {
     // [Required] The regex that triggers the start of this command.
     regex: RegExp | null;
-    // [Required] Can this command continue after the current line?
-    multiline: boolean;
     // [Required] Does this command allow other commands to begin after it?
     stackable: boolean;
 
@@ -53,7 +52,6 @@ interface MarkdownCommandProperties {
 const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
     [MarkdownCommand.CHECKBOX_LABEL]: {
         regex: /^[^\S\n]*- \[([ x])]/,
-        multiline: false,
         stackable: false,
         isEqualToFirst: () => false,
         onMatch: (state, match) => [{
@@ -74,7 +72,6 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
     },
     [MarkdownCommand.BLOCKQUOTE]: {
         regex: /^[^\S\n]*>/,
-        multiline: true,
         stackable: true,
         onStart: (state) => {
             state.renderOpeningTag('blockquote');
@@ -85,7 +82,6 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
     },
     [MarkdownCommand.HORIZONTAL_RULE]: {
         regex: /^[^\S\n]*-{3,}/,
-        multiline: false,
         stackable: false,
         onEnd: (state) => {
             state.renderOpeningTag('hr', undefined, true);
@@ -93,7 +89,6 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
     },
     [MarkdownCommand.LIST]: {
         regex: null,
-        multiline: true,
         stackable: true,
         isEqualToFirst: (cmd, stack, newStack) => {
             const isLast = newStack.map(c => c.type).lastIndexOf(MarkdownCommand.LIST) === 0;
@@ -110,7 +105,6 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
     },
     [MarkdownCommand.LIST_ITEM]: {
         regex: /^((:? {4})*)[^\S\n]*([0-9]+\.|-)[^\S\n]/,
-        multiline: true,
         stackable: false,
         isEqualToFirst: (cmd, stack, newStack) => {
             const isLast = newStack.map(c => c.type).lastIndexOf(MarkdownCommand.LIST_ITEM) === 0;
@@ -136,7 +130,6 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
     },
     [MarkdownCommand.TABLE]: {
         regex: /^[^\S\n]*\|/,
-        multiline: true,
         stackable: false,
         onMatch: () => [{
             type: MarkdownCommand.TABLE,
@@ -155,7 +148,6 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
     },
     [MarkdownCommand.CODE_BLOCK]: {
         regex: /^[^\S\n]*```([\s\S]*?)```/,
-        multiline: true,
         stackable: false,
         onMatch: (_, match) => [{
             type: MarkdownCommand.CODE_BLOCK,
@@ -171,9 +163,17 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
             state.renderClosingTag('pre');
         }
     },
+    [MarkdownCommand.PAGE_BREAK]: {
+        regex: /^[^\S\n]*={3,}/,
+        stackable: false,
+        isEqualToFirst: () => false,
+        onStart: (state) => {
+            state.renderOpeningTag('div', { class: 'pagebreak' });
+            state.renderClosingTag('div');
+        }
+    },
     [MarkdownCommand.HEADING]: {
         regex: /^[^\S\n]*(#{1,6})(.*?)(\{.*})?(?=\n|$)/,
-        multiline: false,
         stackable: false,
         isEqualToFirst: () => false,
         onMatch: (_, match) => [{
@@ -192,7 +192,6 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
     },
     [MarkdownCommand.PARAGRAPH]: {
         regex: /^[^\S\n]*(:?(:::|:--|--:|:-:)[^\S\n])?(?=\S)/,
-        multiline: true,
         stackable: false,
         isEqualToFirst: (cmd, stack) => {
             return cmd.align === undefined || stack[0].state.align === cmd.align;
@@ -213,7 +212,7 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
             cmd.text += `${text}\n`;
         },
         onEnd: (state, cmd) => {
-            state.renderOpeningTag('p', { style: `text-align: ${cmd.align};` });
+            state.renderOpeningTag('p', { style: `text-align: ${cmd.align ?? 'left'};` });
             state.renderText(cmd.text);
             state.renderClosingTag('p');
         }
@@ -270,18 +269,20 @@ class MarkdownRenderState {
         if (!escaped) {
             let match;
             while ((match = text.match(/!\[(.*?)]\((.*?)\)(\{.*?})?/)) !== null) {
-                let rendered_text = '';
+                let renderedText = '';
                 const id = match[3] ? `id="${match[3].substring(1, match[3].length - 1)}"` : '';
                 if (match[1] == '') {
-                    rendered_text = `<img src="${match[2]}" ${id}/>`;
+                    renderedText = `<img src="${match[2]}" ${id}/>`;
                 } else {
-                    rendered_text = `<figure><img src="${match[2]}" alt="${match[1]}" ${id}/><figcaption>${match[1]}</figcaption></figure>`;
+                    renderedText = `<figure>` +
+                        `<img src="${match[2]}" alt="${match[1]}" ${id}/>` +
+                        `<figcaption>${match[1]}</figcaption>` +
+                        `</figure>`;
                 }
-                text = text.substring(0, match.index) + rendered_text + text.substring((match.index ?? 0) + match[0].length);
-                console.log(match);
-                console.log(text);
+                text = text.substring(0, match.index) +
+                    renderedText +
+                    text.substring((match.index ?? 0) + match[0].length);
             }
-
             text = text
                 .replace(/\*\*([\S\s]*?)\*\*/g, '<b>$1</b>')
                 .replace(/__([\S\s]*?)__/g, '<ins>$1</ins>')
@@ -435,9 +436,9 @@ export class MarkdownRenderer {
     public render() {
         while (this._cursor < this._input.length) {
             const [text, commands] = this._lineCommands();
-            console.log(`[${commands.map(c =>
-                `${c.type}${JSON.stringify(c.state)}`).join(' > ')}] "${text}"`
-            );
+            // console.log(`[${commands.map(c =>
+            //     `${c.type}${JSON.stringify(c.state)}`).join(' > ')}] "${text}"`
+            // );
             const diff = this._diffCommands(commands);
             commands.slice(diff).forEach(c => this._state.pushCommand(c));
             const instance = this._state.peekCommand();
