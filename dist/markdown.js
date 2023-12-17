@@ -24721,12 +24721,14 @@ const _sfc_main$1 = /* @__PURE__ */ defineComponent({
   props: {
     value: {}
   },
-  setup(__props) {
+  emits: ["finishRender"],
+  setup(__props, { emit: __emit }) {
+    const emit = __emit;
     const props = __props;
     const render = () => {
-      console.clear();
       const renderer = new MarkdownRenderer(props.value);
       renderer.render();
+      emit("finishRender");
       return renderer.html();
     };
     return (_ctx, _cache) => {

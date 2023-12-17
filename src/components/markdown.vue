@@ -9,12 +9,13 @@ interface Props {
     value: string
 }
 
+const emit = defineEmits(['finishRender']);
 const props = defineProps<Props>();
 
 const render = () => {
-    console.clear();
     const renderer = new MarkdownRenderer(props.value);
     renderer.render();
+    emit('finishRender');
     return renderer.html();
 };
 </script>
