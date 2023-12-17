@@ -1,5 +1,10 @@
 import _ from 'lodash';
-import { escapeHTML } from '@/composables/utils';
+import { escapeHTML, replaceInString } from '@/composables/utils';
+import { liteAdaptor } from 'mathjax-full/js/adaptors/liteAdaptor';
+import { TeX } from 'mathjax-full/js/input/tex';
+import { SVG } from 'mathjax-full/js/output/svg';
+import { mathjax } from 'mathjax-full/js/mathjax';
+import { RegisterHTMLHandler } from 'mathjax-full/js/handlers/html';
 
 enum TextAlignment {
     LEFT = 'left',
@@ -18,7 +23,8 @@ enum MarkdownCommand {
     TABLE = 'table',
     CODE_BLOCK = 'code',
     HORIZONTAL_RULE = 'hr',
-    PAGE_BREAK = 'page'
+    PAGE_BREAK = 'page',
+    MATH = 'math'
 }
 
 interface MarkdownCommandProperties {
@@ -172,6 +178,17 @@ const MARKDOWN_COMMANDS: Record<MarkdownCommand, MarkdownCommandProperties> = {
             state.renderClosingTag('div');
         }
     },
+    [MarkdownCommand.MATH]: {
+        regex: /^[^\S\n]*\${3}([\s\S]*?)\${3}/,
+        stackable: false,
+        onMatch: (_, match) => [{
+            type: MarkdownCommand.MATH,
+            state: { math: match[1] }
+        }],
+        onEnd: (state, cmd) => {
+            state.renderMath(cmd.math);
+        }
+    },
     [MarkdownCommand.HEADING]: {
         regex: /^[^\S\n]*(#{1,6})(.*?)(\{.*})?(?=\n|$)/,
         stackable: false,
@@ -267,22 +284,8 @@ class MarkdownRenderState {
 
     public renderText(text: string, escaped?: boolean) {
         if (!escaped) {
-            let match;
-            while ((match = text.match(/!\[(.*?)]\((.*?)\)(\{.*?})?/)) !== null) {
-                let renderedText = '';
-                const id = match[3] ? `id="${match[3].substring(1, match[3].length - 1)}"` : '';
-                if (match[1] == '') {
-                    renderedText = `<img src="${match[2]}" ${id}/>`;
-                } else {
-                    renderedText = `<figure>` +
-                        `<img src="${match[2]}" alt="${match[1]}" ${id}/>` +
-                        `<figcaption>${match[1]}</figcaption>` +
-                        `</figure>`;
-                }
-                text = text.substring(0, match.index) +
-                    renderedText +
-                    text.substring((match.index ?? 0) + match[0].length);
-            }
+            text = this._renderImages(text);
+            text = this._renderInlineMath(text);
             text = text
                 .replace(/\*\*([\S\s]*?)\*\*/g, '<b>$1</b>')
                 .replace(/__([\S\s]*?)__/g, '<ins>$1</ins>')
@@ -299,6 +302,37 @@ class MarkdownRenderState {
             text = escapeHTML(text);
         }
         this._html += `${text}\n`;
+    }
+
+    private _renderImages(text: string) {
+        let match: RegExpMatchArray | null;
+        while ((match = text.match(/!\[(.*?)]\((.*?)\)(\{.*?})?/)) !== null) {
+            let renderedImage = '';
+            const id = match[3] ? `id="${match[3].substring(1, match[3].length - 1)}"` : '';
+            if (match[1] == '') {
+                renderedImage = `<img src="${match[2]}" alt="" ${id}/>`;
+            } else {
+                renderedImage = `<figure>` +
+                    `<img src="${match[2]}" alt="${match[1]}" ${id}/>` +
+                    `<figcaption>${match[1]}</figcaption>` +
+                    `</figure>`;
+            }
+            text = replaceInString(text, match.index ?? 0, match[0].length, renderedImage);
+        }
+        return text;
+    }
+
+    private _renderInlineMath(text: string) {
+        let match: RegExpMatchArray | null;
+        while ((match = text.match(/\${2}(.*?)\${2}/)) !== null) {
+            const adaptor = liteAdaptor();
+            RegisterHTMLHandler(adaptor);
+            const html = mathjax.document('', { InputJax: new TeX(), OutputJax: new SVG() });
+            const node = html.convert(match[1].trim(), { display: false });
+            const math = adaptor.innerHTML(node);
+            text = replaceInString(text, match.index ?? 0, match[0].length, math);
+        }
+        return text;
     }
 
     public renderOpeningTag(
@@ -411,6 +445,14 @@ class MarkdownRenderState {
             cells.push(match[1]);
         }
         return cells;
+    }
+
+    public renderMath(math: string) {
+        const adaptor = liteAdaptor();
+        RegisterHTMLHandler(adaptor);
+        const html = mathjax.document('', { InputJax: new TeX(), OutputJax: new SVG() });
+        const node = html.convert(math, { display: true });
+        this._html += adaptor.innerHTML(node);
     }
 
     public html() {

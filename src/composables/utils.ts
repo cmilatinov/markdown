@@ -50,3 +50,7 @@ export function escapeHTML(content: string) {
     p.appendChild(text);
     return p.innerHTML;
 }
+
+export function replaceInString(str: string, index: number, length: number, replacement: string) {
+    return str.substring(0, index) + replacement + str.substring(index + length);
+}

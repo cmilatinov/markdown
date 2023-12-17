@@ -1,7 +1,7 @@
 <template>
     <main class="flex h-[100vh]">
-        <textarea class="flex-1 max-h-full overflow-auto font-mono p-3" v-model="md" />
-        <markdown class="flex-1 px-4 max-h-full overflow-auto prose p-3" :value="md" />
+        <textarea class="w-1/2 max-h-full overflow-auto font-mono p-3" v-model="md" />
+        <markdown class="w-1/2 px-4 max-h-full overflow-auto prose p-3" :value="md" />
     </main>
 </template>
 
